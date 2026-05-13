@@ -1,5 +1,7 @@
 {
   "dependencies": {
-    "framer-motion": "^12.38.0"
+    "date-fns": "^4.1.0",
+    "framer-motion": "^12.38.0",
+    "recharts": "^3.8.1"
   }
 }

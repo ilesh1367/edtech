@@ -13,7 +13,7 @@ import contentRoutes from "./routes/content.js";
 import paymentRoutes from "./routes/payments.js";
 import enrollmentRoutes from "./routes/enrollments.js";
 import videoRoutes from "./routes/video.js";
-
+import analyticsRoutes from "./routes/analytics.js";
 // Import config
 import pool from "./config/database.js";
 import { r2Client, R2_BUCKET_NAME } from "./config/r2.js";
@@ -174,7 +174,7 @@ app.use("/api/content", contentRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/enrollments", enrollmentRoutes);
 app.use("/api/video", videoRoutes);
-
+app.use("/api/analytics", analyticsRoutes);
 // ============================================
 // HLS Proxy Route
 // ============================================
