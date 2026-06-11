@@ -3,3 +3,4 @@ node_modules/
 temp_videos/
 .DS_Store
 *.log
+node_modules/
