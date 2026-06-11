@@ -45,7 +45,7 @@ export default function CourseDetailPage() {
   const [activeModuleId, setActiveModuleId] = useState(null);
   const [editingModule, setEditingModule] = useState(null);
   const [contentModalTab, setContentModalTab] = useState('pdf');
-
+const canAccessContent = isCreator || isEnrolled;
   const loadCourseData = async () => {
     setIsLoading(true);
     try {
@@ -228,12 +228,12 @@ export default function CourseDetailPage() {
       </div>
 
       {/* --- PASSING EXPLICIT isEnrolled STATE --- */}
-      <MediaViewerModal 
-        content={activeContent} 
-        courseId={course.id} 
-        isEnrolled={isEnrolled}
-        onClose={() => setActiveContent(null)} 
-      />
+     <MediaViewerModal
+  content={activeContent}
+  courseId={course.id}
+  isEnrolled={canAccessContent}   // was just isEnrolled
+  onClose={() => setActiveContent(null)}
+/>
       
       {/* Educator Modals */}
       <CourseModal isOpen={isCourseModalOpen} onClose={() => setIsCourseModalOpen(false)} course={course} onSave={loadCourseData} />

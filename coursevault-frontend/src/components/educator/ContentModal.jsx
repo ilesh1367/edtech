@@ -26,7 +26,10 @@ export default function ContentModal({ isOpen, onClose, moduleId, onSave, initia
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!file) return alert("Please select a file to upload.");
-
+    const MAX_MB = initialTab === 'video' ? 500 : 100;
+  if (file.size > MAX_MB * 1024 * 1024) {
+  return alert(`File too large. Maximum size is ${MAX_MB} MB for ${initialTab} uploads.`);
+}
     setIsUploading(true);
     const formData = new FormData();
     formData.append('file', file);
@@ -41,7 +44,13 @@ export default function ContentModal({ isOpen, onClose, moduleId, onSave, initia
 
     try {
       // 1. Select the correct endpoint based on file type
-      const endpoint = initialTab === 'video' ? '/content/upload-video' : '/content/upload';
+     const endpoint =
+  initialTab === 'video'
+    ? '/content/upload-video'
+    : '/content/upload'; // PDF and any future types
+    formData.append('content_type', initialTab); // 'video' | 'pdf'
+formData.append('preview', String(preview));  // coerce to string for FormData
+
       const uploadRes = await fetchAPI(endpoint, { 
         method: 'POST', 
         body: formData 
