@@ -36,7 +36,8 @@ export default function CourseDetailPage() {
   const [isEnrolled, setIsEnrolled] = useState(false); // NEW: Explicit enrollment state
   const [expandedModules, setExpandedModules] = useState([]);
   const [activeContent, setActiveContent] = useState(null);
-
+const isCreator = user?.role === 'educator' && (course?.isCreator || user?.id === course?.educator_id);
+  const canAccessContent = isCreator || isEnrolled;
   // Educator States
   const [isCourseModalOpen, setIsCourseModalOpen] = useState(false);
   const [isModuleModalOpen, setIsModuleModalOpen] = useState(false);
@@ -45,7 +46,7 @@ export default function CourseDetailPage() {
   const [activeModuleId, setActiveModuleId] = useState(null);
   const [editingModule, setEditingModule] = useState(null);
   const [contentModalTab, setContentModalTab] = useState('pdf');
-const canAccessContent = isCreator || isEnrolled;
+
   const loadCourseData = async () => {
     setIsLoading(true);
     try {
@@ -84,7 +85,6 @@ const canAccessContent = isCreator || isEnrolled;
   if (isLoading) return <div className="text-center font-bold py-20 text-gray-400">Loading...</div>;
   if (!course) return <div className="text-center font-bold py-20 text-red-500">Course not found.</div>;
 
-  const isCreator = user?.role === 'educator' && (course.isCreator || user?.id === course.educator_id);
 
   // --- RAZORPAY ENROLLMENT LOGIC ---
   const handleEnroll = async () => {
