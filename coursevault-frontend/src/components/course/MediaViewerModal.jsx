@@ -23,7 +23,6 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
 
     const initMedia = async () => {
       try {
-        // FIX: Ensure robust string checking
         const type = content.content_type?.toLowerCase() || '';
 
         if (type.includes('video')) {
@@ -49,7 +48,6 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
             setStreamUrl(`${backendDomain}${streamData.hlsUrl}&token=${token}`);
           }
 
-        // FIX: Broaden the catch net for PDFs and Documents
         } else if (type.includes('pdf') || type.includes('document')) {
           const token = localStorage.getItem('token');
           const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
@@ -65,16 +63,13 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
 
           const rawBlob = await response.blob();
           
-          // Debugging Trap
-          console.log("📥 DOWNLOADED PDF DATA:");
-          console.log("Size:", rawBlob.size, "bytes");
-          console.log("Type:", rawBlob.type);
-
           const pdfBlob = new Blob([rawBlob], { type: 'application/pdf' });
           const objectUrl = URL.createObjectURL(pdfBlob);
-          setPdfUrl(objectUrl);
+          
+          // FIX: Append URL parameters to disable the native browser toolbar and download buttons
+          setPdfUrl(`${objectUrl}#toolbar=0&navpanes=0&scrollbar=0`);
+          
         } else {
-          // FIX: Prevent silent failures. If the type is completely unknown, yell at us!
           throw new Error(`Unknown content type received from database: "${content.content_type}"`);
         }
       } catch (err) {
@@ -152,7 +147,11 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
   // 4. PDF MEMORY CLEANUP HOOK
   useEffect(() => {
     return () => {
-      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+      // We must split the URL to safely revoke just the blob address, ignoring our injected # hash parameters
+      if (pdfUrl) {
+        const rawBlobUrl = pdfUrl.split('#')[0];
+        URL.revokeObjectURL(rawBlobUrl);
+      }
     };
   }, [pdfUrl]);
 
@@ -194,6 +193,7 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
             <video
               ref={videoRef}
               controls
+              controlsList="nodownload" 
               className="w-full h-full max-h-[75vh] object-contain bg-black"
             />
           )}
