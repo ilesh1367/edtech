@@ -35,10 +35,10 @@ export const AuthProvider = ({ children }) => {
     navigate('/explore');
   };
 
-  const register = async (name, email, password) => {
+  const register = async (name, email, password, role) => {
     const data = await fetchAPI('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ name, email, password, role: 'student' })
+      body: JSON.stringify({ name, email, password, role }) // Dynamically passing the role
     });
     localStorage.setItem('token', data.token);
     setUser(data.user);

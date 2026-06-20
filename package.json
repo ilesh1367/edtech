@@ -2,6 +2,7 @@
   "dependencies": {
     "date-fns": "^4.1.0",
     "framer-motion": "^12.38.0",
+    "hls.js": "^1.6.16",
     "recharts": "^3.8.1"
   }
 }

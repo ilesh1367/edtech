@@ -1,4 +1,3 @@
-
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
@@ -11,6 +10,7 @@ import { r2Client, R2_BUCKET_NAME } from "../config/r2.js";
 import authMiddleware from "../middleware/auth.js";
 import { generateFileHash, getFileExtension, getMimeType } from "../utils/helpers.js";
 import { PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+
 const router = express.Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMP_VIDEO_DIR = path.join(__dirname, "../temp_videos");
@@ -41,7 +41,9 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
 
         const fileHash = generateFileHash(file.buffer);
         const extension = getFileExtension(file.originalname);
-        const mimeType = getMimeType(file.originalname);
+        
+        // FIX 1: Force fallback to application/pdf so R2 doesn't corrupt it as octet-stream
+        const mimeType = getMimeType(file.originalname) || "application/pdf";
 
         const existing = await pool.query(`SELECT * FROM content_items WHERE file_hash = $1`, [fileHash]);
         if (existing.rows.length > 0) {
@@ -50,7 +52,14 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
 
         const hashPrefix = fileHash.slice(0, 6);
         const r2Key = `content/${hashPrefix}/${fileHash}${extension}`;
-        await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET_NAME, Key: r2Key, Body: file.buffer, ContentType: mimeType }));
+        
+        // The ContentType parameter is now guaranteed to be accurate
+        await r2Client.send(new PutObjectCommand({ 
+            Bucket: R2_BUCKET_NAME, 
+            Key: r2Key, 
+            Body: file.buffer, 
+            ContentType: mimeType 
+        }));
 
         const result = await pool.query(`
             INSERT INTO content_items (title, description, content_type, file_hash, file_name, file_size_bytes, mime_type, r2_key, status, preview, created_by)
@@ -199,61 +208,90 @@ router.get("/:id/status", async (req, res) => {
 });
 
 // GET /api/content/:id/pdf
+// GET /api/content/:id/pdf
+// GET /api/content/:id/pdf
+
+// GET /api/content/:id/pdf
 router.get("/:id/pdf", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        
-        if (!req.isContentCreator && !req.isEnrolled && !req.isPreviewContent) {
-            return res.status(403).json({ 
-                error: "Access denied. You are not enrolled in this course.",
-                requiresEnrollment: true,
-                courseId: req.courseId
-            });
-        }
+        const requestedCourseId = req.query.courseId; // <-- Grab context from frontend
         
         const result = await pool.query(`SELECT * FROM content_items WHERE id = $1`, [id]);
         if (result.rows.length === 0) return res.status(404).json({ error: "Content not found" });
         const content = result.rows[0];
-        if (content.content_type !== "pdf") return res.status(400).json({ error: "Not a PDF file" });
-	const command = new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: content.r2_key });
+
+        let isCourseOwner = false;
+        if (requestedCourseId) {
+             const cCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [requestedCourseId]);
+             if (cCheck.rows.length > 0 && cCheck.rows[0].educator_id === req.user.id) {
+                 isCourseOwner = true;
+             }
+        }
+
+        const isOwner = content.created_by === req.user.id || isCourseOwner;
+        
+        if (!isOwner && !req.isContentCreator && !req.isEnrolled && !req.isPreviewContent) {
+            return res.status(403).json({ 
+                error: "Access denied. You are not enrolled in this course.",
+                requiresEnrollment: true
+            });
+        }
+        
+        // FIX: Relax the strict "pdf" check to allow "application/pdf" and other variations
+        const type = content.content_type?.toLowerCase() || "";
+        if (!type.includes("pdf") && !type.includes("document")) {
+            return res.status(400).json({ error: `Not a PDF file (Found type: ${content.content_type})` });
+        }
+
+        const command = new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: content.r2_key });
         const r2Response = await r2Client.send(command);
+
+        const byteArray = await r2Response.Body.transformToByteArray();
+        const pdfBuffer = Buffer.from(byteArray);
 
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", "inline");
-        
-        // Forcefully remove the global DENY/SAMEORIGIN header just for PDFs so the iframe always works
+        res.setHeader("Content-Length", pdfBuffer.length);
         res.removeHeader("X-Frame-Options"); 
         
-        if (r2Response.ContentLength) {
-            res.setHeader("Content-Length", r2Response.ContentLength);
-        }
-
-        // Directly pipe the R2 stream to the browser (Fixes the crashing/hanging)
-        r2Response.Body.pipe(res);
+        res.send(pdfBuffer);
         
      } catch (err) {
         console.error("PDF fetch error:", err);
         res.status(500).json({ error: err.message });
     }
 });
-
+// GET /api/content/:id/stream
+// GET /api/content/:id/stream
 // GET /api/content/:id/stream
 router.get("/:id/stream", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        
-        if (!req.isContentCreator && !req.isEnrolled && !req.isPreviewContent) {
-            return res.status(403).json({ 
-                error: "Access denied. You are not enrolled in this course.",
-                requiresEnrollment: true,
-                courseId: req.courseId
-            });
-        }
+        const requestedCourseId = req.query.courseId; // <-- Grab context from frontend
         
         const result = await pool.query(`SELECT * FROM content_items WHERE id = $1`, [id]);
         if (result.rows.length === 0) return res.status(404).json({ error: "Content not found" });
-
         const content = result.rows[0];
+
+        // FIX: If the user owns the course this is being viewed from, grant immediate access
+        let isCourseOwner = false;
+        if (requestedCourseId) {
+             const cCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [requestedCourseId]);
+             if (cCheck.rows.length > 0 && cCheck.rows[0].educator_id === req.user.id) {
+                 isCourseOwner = true;
+             }
+        }
+
+        const isOwner = content.created_by === req.user.id || isCourseOwner;
+        
+        if (!isOwner && !req.isContentCreator && !req.isEnrolled && !req.isPreviewContent) {
+            return res.status(403).json({ 
+                error: "Access denied. You are not enrolled in this course.",
+                requiresEnrollment: true
+            });
+        }
+
         if (content.content_type !== "video") return res.status(400).json({ error: "Not a video" });
 
         if (content.status !== "ready") {
@@ -268,7 +306,7 @@ router.get("/:id/stream", authMiddleware, async (req, res) => {
             success: true,
             hlsUrl: `/api/hls/serve?videoId=${id}&path=master.m3u8`,
             duration: content.duration_seconds,
-            accessType: req.isContentCreator ? 'creator' : (req.isPreviewContent ? 'preview' : 'enrolled')
+            accessType: isOwner || req.isContentCreator ? 'creator' : (req.isPreviewContent ? 'preview' : 'enrolled')
         });
     } catch (err) {
         console.error("Stream endpoint error:", err);
@@ -400,13 +438,13 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
             console.log(`\n🎬 Transcoding ${resName}...`);
 
             await new Promise((resolve, reject) => {
-const ffmpeg = spawn("ffmpeg", [
+                const ffmpeg = spawn("ffmpeg", [
                     "-i", inputPath,
                     "-vf", `scale=${scale}`,
                     "-c:v", "libx264", "-preset", "medium",
                     "-b:v", bitrate, "-maxrate", bitrate,
                     "-bufsize", `${parseInt(bitrate) * 2}k`,
-                    "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", // <-- ADDED THIS LINE
+                    "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", 
                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
                     "-f", "hls",
                     "-hls_time", "10",

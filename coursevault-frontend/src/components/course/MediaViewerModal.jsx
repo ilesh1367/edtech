@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Loader } from 'lucide-react';
 import { fetchAPI } from '../../services/api.js';
+import Hls from 'hls.js';
 
 export default function MediaViewerModal({ content, courseId, isEnrolled, onClose }) {
   const [loading, setLoading] = useState(true);
@@ -8,8 +9,11 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
   const [pdfUrl, setPdfUrl] = useState(null);
   const [error, setError] = useState(null);
   const [savedPosition, setSavedPosition] = useState(0);
+  
   const videoRef = useRef(null);
+  const hlsRef = useRef(null);
 
+  // 1. MAIN MEDIA FETCH HOOK
   useEffect(() => {
     if (!content) return;
     setLoading(true);
@@ -19,31 +23,63 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
 
     const initMedia = async () => {
       try {
-        if (content.content_type === 'video') {
-          const streamData = await fetchAPI(`/content/${content.id}/stream`);
-          if (streamData.hlsUrl) {
-            const token = localStorage.getItem('token');
-            setStreamUrl(`${window.location.origin}${streamData.hlsUrl}&token=${token}`);
-          }
+        // FIX: Ensure robust string checking
+        const type = content.content_type?.toLowerCase() || '';
+
+        if (type.includes('video')) {
+          const streamData = await fetchAPI(`/content/${content.id}/stream?courseId=${courseId || ''}`);
+          
+          let initialPos = 0;
           if (courseId && isEnrolled) {
             try {
               const progressData = await fetchAPI(`/video/progress/${content.id}`);
               if (progressData.hasProgress) {
-                setSavedPosition(parseFloat(progressData.position));
+                initialPos = parseFloat(progressData.position);
+                setSavedPosition(initialPos);
               }
             } catch (_) {}
           }
-        } else if (content.content_type === 'pdf') {
+
+          if (streamData.hlsUrl) {
+            const token = localStorage.getItem('token');
+            const backendDomain = import.meta.env.VITE_API_URL 
+              ? import.meta.env.VITE_API_URL.replace('/api', '') 
+              : 'http://localhost:3000';
+            
+            setStreamUrl(`${backendDomain}${streamData.hlsUrl}&token=${token}`);
+          }
+
+        // FIX: Broaden the catch net for PDFs and Documents
+        } else if (type.includes('pdf') || type.includes('document')) {
           const token = localStorage.getItem('token');
-          setPdfUrl(`${import.meta.env.VITE_API_URL}/content/${content.id}/pdf?token=${token}`);
+          const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+
+          const response = await fetch(`${baseUrl}/content/${content.id}/pdf?courseId=${courseId || ''}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || 'Failed to fetch PDF');
+          }
+
+          const rawBlob = await response.blob();
+          
+          // Debugging Trap
+          console.log("📥 DOWNLOADED PDF DATA:");
+          console.log("Size:", rawBlob.size, "bytes");
+          console.log("Type:", rawBlob.type);
+
+          const pdfBlob = new Blob([rawBlob], { type: 'application/pdf' });
+          const objectUrl = URL.createObjectURL(pdfBlob);
+          setPdfUrl(objectUrl);
+        } else {
+          // FIX: Prevent silent failures. If the type is completely unknown, yell at us!
+          throw new Error(`Unknown content type received from database: "${content.content_type}"`);
         }
       } catch (err) {
-        console.error('Failed to load media', err);
-        if (err.message?.includes('not enrolled') || err.message?.includes('Access denied')) {
-          setError('You need to enroll in this course to access this content.');
-        } else {
-          setError(err.message || 'Failed to load content');
-        }
+        console.error('Failed to load media:', err);
+        setError(err.message || 'Failed to load content');
       } finally {
         setLoading(false);
       }
@@ -52,8 +88,39 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
     initMedia();
   }, [content, courseId, isEnrolled]);
 
+  // 2. THE HLS.JS STREAMING HOOK
+  useEffect(() => {
+    const type = content?.content_type?.toLowerCase() || '';
+    if (!streamUrl || !videoRef.current || !type.includes('video')) return;
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({ maxMaxBufferLength: 30 });
+      hlsRef.current = hls;
+
+      hls.loadSource(streamUrl);
+      hls.attachMedia(videoRef.current);
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (savedPosition > 0) videoRef.current.currentTime = savedPosition;
+        videoRef.current.play().catch(e => console.log("Auto-play blocked:", e));
+      });
+
+      return () => {
+        hls.destroy();
+      };
+    } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      videoRef.current.src = streamUrl;
+      videoRef.current.addEventListener('loadedmetadata', () => {
+        if (savedPosition > 0) videoRef.current.currentTime = savedPosition;
+        videoRef.current.play().catch(e => console.log("Auto-play blocked:", e));
+      });
+    }
+  }, [streamUrl, savedPosition, content]);
+
+  // 3. VIDEO PROGRESS HOOK
   const saveProgressToDB = async (trigger = 'Interval') => {
-    if (!content || content.content_type !== 'video') return;
+    const type = content?.content_type?.toLowerCase() || '';
+    if (!content || !type.includes('video')) return;
     if (!courseId || !isEnrolled || !videoRef.current) return;
     const currentPos = Math.round(videoRef.current.currentTime);
     if (currentPos <= 0) return;
@@ -69,7 +136,8 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
   };
 
   useEffect(() => {
-    if (!content || content.content_type !== 'video' || !courseId || !isEnrolled) return;
+    const type = content?.content_type?.toLowerCase() || '';
+    if (!content || !type.includes('video') || !courseId || !isEnrolled) return;
 
     const intervalId = setInterval(() => {
       if (videoRef.current && !videoRef.current.paused) saveProgressToDB('Interval');
@@ -81,13 +149,18 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
     };
   }, [content, courseId, isEnrolled]);
 
-  const handleLoadedMetadata = () => {
-    if (videoRef.current && savedPosition > 0) {
-      videoRef.current.currentTime = savedPosition;
-    }
-  };
+  // 4. PDF MEMORY CLEANUP HOOK
+  useEffect(() => {
+    return () => {
+      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+    };
+  }, [pdfUrl]);
 
   if (!content) return null;
+  
+  const type = content.content_type?.toLowerCase() || '';
+  const isVideo = type.includes('video');
+  const isPdf = type.includes('pdf') || type.includes('document');
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-[#FDF1E9]/90 backdrop-blur-sm">
@@ -116,19 +189,16 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
               <p className="text-sm font-normal text-gray-500">{error}</p>
             </div>
           )}
-          {!loading && !error && content.content_type === 'video' && streamUrl && (
+          
+          {!loading && !error && isVideo && streamUrl && (
             <video
               ref={videoRef}
               controls
-              autoPlay
               className="w-full h-full max-h-[75vh] object-contain bg-black"
-              onLoadedMetadata={handleLoadedMetadata}
-            >
-              <source src={streamUrl} type="application/vnd.apple.mpegurl" />
-              Your browser does not support HTML video playback.
-            </video>
+            />
           )}
-          {!loading && !error && content.content_type === 'pdf' && pdfUrl && (
+          
+          {!loading && !error && isPdf && pdfUrl && (
             <iframe
               src={pdfUrl}
               title={content.title}

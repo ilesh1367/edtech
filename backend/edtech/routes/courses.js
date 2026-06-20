@@ -1,8 +1,11 @@
 import express from "express";
+import jwt from "jsonwebtoken";
 import pool from "../config/database.js";
 import authMiddleware from "../middleware/auth.js";
 
 const router = express.Router();
+// FIX 1: Add the fallback secret so jwt.verify doesn't crash
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
 
 // GET /api/courses
 router.get("/", async (req, res) => {
@@ -99,11 +102,25 @@ router.get("/:id", async (req, res) => {
     try {
         const { id } = req.params;
         
+        // 1. Identify the user FIRST
+        let userId = null;
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith("Bearer ")) {
+            try {
+                const token = authHeader.split(" ")[1];
+                const decoded = jwt.verify(token, JWT_SECRET);
+                userId = decoded.id;
+            } catch (err) {
+                console.error("Token verification failed silently:", err.message);
+            } 
+        }
+
+        // 2. Fetch the course WITHOUT the 'published' restriction
         const courseResult = await pool.query(`
             SELECT c.*, u.name as educator_name
             FROM courses c
             JOIN users u ON c.educator_id = u.id
-            WHERE c.id = $1 AND c.status = 'published' AND c.is_active = true
+            WHERE c.id = $1 AND c.is_active = true
         `, [id]);
         
         if (courseResult.rows.length === 0) {
@@ -111,7 +128,14 @@ router.get("/:id", async (req, res) => {
         }
         
         const course = courseResult.rows[0];
+        const isCreator = userId === course.educator_id;
+
+        // 3. Security Check: Block students from seeing drafts, but let the creator in
+        if (course.status !== 'published' && !isCreator) {
+            return res.status(404).json({ error: "Course not found" });
+        }
         
+        // 4. Fetch Modules
         const modulesResult = await pool.query(`
             SELECT * FROM modules 
             WHERE course_id = $1 AND is_active = true 
@@ -124,7 +148,7 @@ router.get("/:id", async (req, res) => {
             if (module.content_ids && module.content_ids.length > 0) {
                 const contentResult = await pool.query(`
                     SELECT id, title, description, content_type, duration_seconds, 
-                           thumbnail_url, preview, created_at
+                           thumbnail_url, preview, created_at, file_size_bytes
                     FROM content_items 
                     WHERE id = ANY($1::uuid[])
                     AND status = 'ready'
@@ -134,22 +158,14 @@ router.get("/:id", async (req, res) => {
             modules.push({ ...module, contents });
         }
         
+        // 5. Check Enrollment status for students
         let isEnrolled = false;
-        let isCreator = false;
-        
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith("Bearer ")) {
-            try {
-                const token = authHeader.split(" ")[1];
-                const decoded = jwt.verify(token, JWT_SECRET);
-                
-                const enrollmentCheck = await pool.query(
-                    `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
-                    [decoded.id, id]
-                );
-                isEnrolled = enrollmentCheck.rows.length > 0;
-                isCreator = course.educator_id === decoded.id;
-            } catch (err) {}
+        if (userId && !isCreator) {
+            const enrollmentCheck = await pool.query(
+                `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
+                [userId, id]
+            );
+            isEnrolled = enrollmentCheck.rows.length > 0;
         }
         
         res.json({ 
@@ -219,7 +235,12 @@ router.put("/:id", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         
-        if (!req.isCourseCreator) {
+        // FIX 2: Explicitly check database ownership instead of relying on a ghost variable
+        const courseCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [id]);
+        if (courseCheck.rows.length === 0) {
+            return res.status(404).json({ error: "Course not found" });
+        }
+        if (courseCheck.rows[0].educator_id !== req.user.id) {
             return res.status(403).json({ error: "Only course creator can update courses" });
         }
         
@@ -284,7 +305,12 @@ router.post("/:id/reactivate", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         
-        if (!req.isCourseCreator) {
+        // FIX 3: Explicit ownership check
+        const courseCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [id]);
+        if (courseCheck.rows.length === 0) {
+            return res.status(404).json({ error: "Course not found" });
+        }
+        if (courseCheck.rows[0].educator_id !== req.user.id) {
             return res.status(403).json({ error: "Only course creator can reactivate" });
         }
         
