@@ -1,3 +1,4 @@
+
 import express from "express";
 import multer from "multer";
 import crypto from "crypto";
@@ -214,18 +215,23 @@ router.get("/:id/pdf", authMiddleware, async (req, res) => {
         if (result.rows.length === 0) return res.status(404).json({ error: "Content not found" });
         const content = result.rows[0];
         if (content.content_type !== "pdf") return res.status(400).json({ error: "Not a PDF file" });
-
-        const command = new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: content.r2_key });
+	const command = new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: content.r2_key });
         const r2Response = await r2Client.send(command);
-        const chunks = [];
-        for await (const chunk of r2Response.Body) chunks.push(chunk);
 
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", "inline");
-        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-        res.setHeader("X-Frame-Options", "DENY");
-        res.send(Buffer.concat(chunks));
-    } catch (err) {
+        
+        // Forcefully remove the global DENY/SAMEORIGIN header just for PDFs so the iframe always works
+        res.removeHeader("X-Frame-Options"); 
+        
+        if (r2Response.ContentLength) {
+            res.setHeader("Content-Length", r2Response.ContentLength);
+        }
+
+        // Directly pipe the R2 stream to the browser (Fixes the crashing/hanging)
+        r2Response.Body.pipe(res);
+        
+     } catch (err) {
         console.error("PDF fetch error:", err);
         res.status(500).json({ error: err.message });
     }
@@ -394,12 +400,13 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
             console.log(`\n🎬 Transcoding ${resName}...`);
 
             await new Promise((resolve, reject) => {
-                const ffmpeg = spawn("ffmpeg", [
+const ffmpeg = spawn("ffmpeg", [
                     "-i", inputPath,
                     "-vf", `scale=${scale}`,
                     "-c:v", "libx264", "-preset", "medium",
                     "-b:v", bitrate, "-maxrate", bitrate,
                     "-bufsize", `${parseInt(bitrate) * 2}k`,
+                    "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", // <-- ADDED THIS LINE
                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
                     "-f", "hls",
                     "-hls_time", "10",
@@ -408,7 +415,6 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
                     "-hls_segment_filename", segmentPattern,
                     playlistPath
                 ]);
-
                 ffmpeg.stderr.on("data", (data) => {
                     const str = data.toString();
                     const match = str.match(/frame=\s*(\d+)/);

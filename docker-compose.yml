@@ -25,11 +25,11 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ./coursevault-frontend
       dockerfile: Dockerfile
       args:
         # Pass the public URL of your backend API
-        - VITE_API_URL=https://api.yourdomain.com/api
+        - VITE_API_URL=https://sv.gridsphere.in/api
     container_name: coursevault-frontend
     restart: always
     ports:

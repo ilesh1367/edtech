@@ -8,7 +8,7 @@ const getBaseUrl = () => {
   }
   // In production, the backend is likely on the same host (VPS IP/Domain)
   // We point the API to the same server, but on port 3000
-  return `http://${window.location.hostname}:3000/api`;
+  return window.location.origin + '/api';
 };
 
 const BASE_URL = getBaseUrl();

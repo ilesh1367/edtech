@@ -1,22 +1,22 @@
 FROM node:20-slim
 
-# Install ffmpeg for video processing and clean up apt cache to keep image small
+# Install ffmpeg for video processing and clean up apt cache
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy package files and install dependencies
-COPY package*.json ./
-RUN npm ci
+# 1. Copy package files FIRST
+COPY edtech/package*.json ./
 
-# Copy the rest of the application
-COPY . .
+# 2. Install dependencies SECOND
+RUN npm install
 
-# Create the temp_videos directory to prevent runtime errors
+# 3. Copy the rest of the application THIRD
+COPY edtech/ .
+
+# Create the temp_videos directory
 RUN mkdir -p temp_videos
 
 EXPOSE 3000
 
-# Assuming your entry point is server.js
 CMD ["node", "server.js"]
-

@@ -2,7 +2,7 @@
 FROM node:20-slim AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 COPY . .
 # Pass the API URL during the build stage so Vite can bake it into the static files
 ARG VITE_API_URL

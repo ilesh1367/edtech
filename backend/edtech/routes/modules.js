@@ -1,9 +1,10 @@
+
+
 import express from "express";
 import pool from "../config/database.js";
 import authMiddleware from "../middleware/auth.js";
 
-const router = express.Router();
-
+const router = express.Router()
 // POST /api/modules
 router.post("/", authMiddleware, async (req, res) => {
     try {
@@ -24,7 +25,7 @@ router.post("/", authMiddleware, async (req, res) => {
         
         const orderResult = await pool.query(`
             SELECT COALESCE(MAX(module_order), -1) + 1 as next_order 
-            FROM modules WHERE course_id = $1
+            FROM modules WHERE course_id = $1 AND is_active = true
         `, [course_id]);
         const nextOrder = orderResult.rows[0]?.next_order || 0;
         
@@ -117,14 +118,30 @@ router.put("/:id", authMiddleware, async (req, res) => {
 });
 
 // DELETE /api/modules/:id
+// DELETE /api/modules/:id
 router.delete("/:id", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         
-        if (!req.isCourseCreator) {
-            return res.status(403).json({ error: "Only course creator can delete modules" });
+        // 1. FIRST, fetch the educator_id from the database using a JOIN
+        const courseResult = await pool.query(`
+            SELECT c.educator_id 
+            FROM courses c
+            JOIN modules m ON c.id = m.course_id
+            WHERE m.id = $1
+        `, [id]);
+
+        // 2. Check if the module actually exists before proceeding
+        if (courseResult.rows.length === 0) {
+            return res.status(404).json({ error: "Module not found" });
         }
+
+        // 3. NOW we can safely check if the logged-in user is the creator
+        if (courseResult.rows[0].educator_id !== req.user.id) {
+            return res.status(403).json({ error: "Only course creator can delete modules" });
+        }                
         
+        // 4. Finally, do the actual soft-delete
         const result = await pool.query(`
             UPDATE modules 
             SET is_active = false, 
@@ -141,9 +158,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
-});
-
-// POST /api/modules/:id/reactivate
+});        
 router.post("/:id/reactivate", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;

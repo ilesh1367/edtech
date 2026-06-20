@@ -155,12 +155,14 @@ app.use(express.json());
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use((req, res, next) => {
-    // Allows the browser to render the response in an iframe from the same origin
+    // 1. Force the browser to ALWAYS fetch fresh data (Fixes the "many refreshes" bug)
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    
+    // 2. Allows the browser to render the response in an iframe from the same origin
     res.setHeader("X-Frame-Options", "SAMEORIGIN"); 
     
-    // Modern way to allow specific domains to frame your content
-    // This explicitly trusts your React frontend on port 5173
-    res.setHeader("Content-Security-Policy", "frame-ancestors 'self' http://localhost:5173");
+    // 3. Explicitly trust your actual production domain!
+    res.setHeader("Content-Security-Policy", "frame-ancestors 'self' http://localhost:5173 https://sv.gridsphere.in");
     
     next();
 });
@@ -224,7 +226,9 @@ app.get("/api/hls/serve", async (req, res) => {
         );
         res.setHeader("Cache-Control", "no-cache, no-store, private");
         res.setHeader("Access-Control-Allow-Origin", "*");
-
+	if (r2Response.ContentLength) {
+            res.setHeader("Content-Length", r2Response.ContentLength);
+        }
         if (isTs) {
             r2Response.Body.pipe(res);
             return;

@@ -114,7 +114,7 @@ router.get("/:id", async (req, res) => {
         
         const modulesResult = await pool.query(`
             SELECT * FROM modules 
-            WHERE course_id = $1 
+            WHERE course_id = $1 AND is_active = true 
             ORDER BY module_order ASC
         `, [id]);
         

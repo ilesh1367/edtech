@@ -161,16 +161,15 @@ const isCreator = user?.role === 'educator' && (course?.isCreator || user?.id ==
     }
   };
 
-  const handleDeleteModule = async (moduleId) => {
+const handleDeleteModule = async (moduleId) => {
     if (!window.confirm('⚠️ Delete this module?')) return;
     try {
         await fetchAPI(`/modules/${moduleId}`, { method: 'DELETE' });
-        loadCourseData();
+        loadCourseData(); // <-- This is the magic line that updates the UI
     } catch (err) {
         alert(err.message || 'Delete failed');
     }
   };
-
   return (
     <div className="max-w-5xl mx-auto pb-20">
       <button onClick={() => navigate(-1)} className="mb-8 font-bold text-xs uppercase tracking-widest hover:text-[#F26B4D]">← Back</button>
