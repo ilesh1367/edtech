@@ -7,6 +7,10 @@ import CourseDetailPage from './pages/CourseDetailPage.jsx';
 import EducatorDashboardPage from './pages/EducatorDashboardPage.jsx';
 import AnalyticsPage from './pages/AnalyticsPage.jsx';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
+
+// NEW: Import the security wrapper
+import ScreenProtection from './components/security/ScreenProtection.jsx'; 
+
 import './styles/globals.css';
 
 // Protected Route Wrapper
@@ -21,29 +25,32 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          {/* Public Auth Route */}
-          <Route path="/login" element={<AuthPage />} />
-          
-          {/* Protected Application Routes */}
-          <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-            <Route path="/" element={<Navigate to="/explore" replace />} />
+        {/* SECURE ENVELOPE: This wraps every route to globally block screenshots and snipping tools */}
+        <ScreenProtection>
+          <Routes>
+            {/* Public Auth Route */}
+            <Route path="/login" element={<AuthPage />} />
             
-            {/* Student Specific */}
-            <Route path="/explore" element={<ExplorePage />} />
-            <Route path="/my-learning" element={<MyLearningPage />} />
+            {/* Protected Application Routes */}
+            <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
+              <Route path="/" element={<Navigate to="/explore" replace />} />
+              
+              {/* Student Specific */}
+              <Route path="/explore" element={<ExplorePage />} />
+              <Route path="/my-learning" element={<MyLearningPage />} />
+              
+              {/* Educator Specific */}
+              <Route path="/dashboard" element={<EducatorDashboardPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
+              
+              {/* Common Course View */}
+              <Route path="/course/:id" element={<CourseDetailPage />} />
+            </Route>
             
-            {/* Educator Specific */}
-            <Route path="/dashboard" element={<EducatorDashboardPage />} />
-            <Route path="/analytics" element={<AnalyticsPage />} />
-            
-            {/* Common Course View */}
-            <Route path="/course/:id" element={<CourseDetailPage />} />
-          </Route>
-          
-          {/* Catch-all Redirect */}
-          <Route path="*" element={<Navigate to="/explore" replace />} />
-        </Routes>
+            {/* Catch-all Redirect */}
+            <Route path="*" element={<Navigate to="/explore" replace />} />
+          </Routes>
+        </ScreenProtection>
       </AuthProvider>
     </BrowserRouter>
   );
