@@ -98,6 +98,7 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
 });
 
 // GET /api/courses/:id
+// GET /api/courses/:id
 router.get("/:id", async (req, res) => {
     try {
         const { id } = req.params;
@@ -158,11 +159,11 @@ router.get("/:id", async (req, res) => {
             modules.push({ ...module, contents });
         }
         
-        // 5. Check Enrollment status for students
+        // 5. FIX: Check strictly for ACTIVE Enrollment status
         let isEnrolled = false;
         if (userId && !isCreator) {
             const enrollmentCheck = await pool.query(
-                `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
+                `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND status = 'active'`, // <-- ADDED status = 'active'
                 [userId, id]
             );
             isEnrolled = enrollmentCheck.rows.length > 0;
@@ -181,7 +182,6 @@ router.get("/:id", async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 // POST /api/courses
 router.post("/", authMiddleware, async (req, res) => {
     try {
@@ -329,6 +329,39 @@ router.post("/:id/reactivate", authMiddleware, async (req, res) => {
         
         res.json({ success: true, message: "Course reactivated successfully" });
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// PUT /api/courses/:id/publish
+// PUT /api/courses/:id/publish
+router.put("/:id/publish", authMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { is_published } = req.body; // true or false from React
+
+        // FIX: Map the boolean from React to the actual database 'status' text
+        const newStatus = is_published ? 'published' : 'draft';
+
+        // 1. Verify the course exists and the user actually owns it
+        const courseCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [id]);
+        
+        if (courseCheck.rows.length === 0) {
+            return res.status(404).json({ error: "Course not found" });
+        }
+        
+        if (courseCheck.rows[0].educator_id !== req.user.id) {
+            return res.status(403).json({ error: "Unauthorized: Only the creator can publish this course" });
+        }
+
+        // 2. Update the 'status' column (NOT is_published)
+        const result = await pool.query(
+            `UPDATE courses SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+            [newStatus, id]
+        );
+
+        res.json({ success: true, course: result.rows[0] });
+    } catch (err) {
+        console.error("Publish toggle error:", err);
         res.status(500).json({ error: err.message });
     }
 });

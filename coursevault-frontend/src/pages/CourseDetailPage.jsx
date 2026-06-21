@@ -13,7 +13,6 @@ import { fetchAPI } from '../services/api.js';
 import { getBgColor } from '../utils/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
-// Utility to load Razorpay script dynamically
 const loadRazorpayScript = () => {
   return new Promise((resolve) => {
     const script = document.createElement('script');
@@ -33,11 +32,13 @@ export default function CourseDetailPage() {
   const [modules, setModules] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isEnrolling, setIsEnrolling] = useState(false);
-  const [isEnrolled, setIsEnrolled] = useState(false); // NEW: Explicit enrollment state
+  const [isEnrolled, setIsEnrolled] = useState(false); 
   const [expandedModules, setExpandedModules] = useState([]);
   const [activeContent, setActiveContent] = useState(null);
-const isCreator = user?.role === 'educator' && (course?.isCreator || user?.id === course?.educator_id);
+  
+  const isCreator = user?.role === 'educator' && (course?.isCreator || user?.id === course?.educator_id);
   const canAccessContent = isCreator || isEnrolled;
+  
   // Educator States
   const [isCourseModalOpen, setIsCourseModalOpen] = useState(false);
   const [isModuleModalOpen, setIsModuleModalOpen] = useState(false);
@@ -47,32 +48,26 @@ const isCreator = user?.role === 'educator' && (course?.isCreator || user?.id ==
   const [editingModule, setEditingModule] = useState(null);
   const [contentModalTab, setContentModalTab] = useState('pdf');
 
-  const loadCourseData = async () => {
+ const loadCourseData = async () => {
     setIsLoading(true);
     try {
       // 1. Fetch Course Data
       const data = await fetchAPI(`/courses/${id}`);
       setCourse(data.course);
       setModules(data.modules || []);
+      
       if (data.modules?.length > 0 && expandedModules.length === 0) {
           setExpandedModules([data.modules[0].id]);
       }
 
-      // 2. Fetch Enrollment Status
-      if (user?.role !== 'educator') {
-          try {
-              const enrollData = await fetchAPI(`/enrollments/${id}`);
-              if (enrollData.success) {
-                  setIsEnrolled(true);
-              }
-          } catch (err) {
-              // 404 means not enrolled
-              setIsEnrolled(false);
-          }
-      } else {
-          // Educators automatically get enrolled access to their own courses
+      // 2. FIX: Use the backend's absolute source of truth for enrollment
+      if (user?.role === 'educator') {
           setIsEnrolled(true);
+      } else {
+          // The backend /courses/:id route already accurately calculates this!
+          setIsEnrolled(!!data.course.isEnrolled);
       }
+      
     } catch (err) {
         console.error(err);
     } finally {
@@ -85,8 +80,28 @@ const isCreator = user?.role === 'educator' && (course?.isCreator || user?.id ==
   if (isLoading) return <div className="text-center font-bold py-20 text-gray-400">Loading...</div>;
   if (!course) return <div className="text-center font-bold py-20 text-red-500">Course not found.</div>;
 
+  // FIX: Derive the state directly from the database's string status
+  const isPublished = course.status === 'published';
 
-  // --- RAZORPAY ENROLLMENT LOGIC ---
+  const handleTogglePublish = async () => {
+    try {
+      const newStatusStr = isPublished ? 'draft' : 'published';
+      
+      // Optimistically update the UI status string
+      setCourse({ ...course, status: newStatusStr });
+
+      await fetchAPI(`/courses/${course.id}/publish`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_published: !isPublished })
+      });
+      
+    } catch (err) {
+      console.error("Failed to toggle publish status", err);
+      setCourse({ ...course, status: isPublished ? 'published' : 'draft' });
+      alert("Failed to update course status.");
+    }
+  };
+
   const handleEnroll = async () => {
     setIsEnrolling(true);
     try {
@@ -161,15 +176,16 @@ const isCreator = user?.role === 'educator' && (course?.isCreator || user?.id ==
     }
   };
 
-const handleDeleteModule = async (moduleId) => {
+  const handleDeleteModule = async (moduleId) => {
     if (!window.confirm('⚠️ Delete this module?')) return;
     try {
         await fetchAPI(`/modules/${moduleId}`, { method: 'DELETE' });
-        loadCourseData(); // <-- This is the magic line that updates the UI
+        loadCourseData(); 
     } catch (err) {
         alert(err.message || 'Delete failed');
     }
   };
+
   return (
     <div className="max-w-5xl mx-auto pb-20">
       <button onClick={() => navigate(-1)} className="mb-8 font-bold text-xs uppercase tracking-widest hover:text-[#F26B4D]">← Back</button>
@@ -187,9 +203,22 @@ const handleDeleteModule = async (moduleId) => {
           <div className="flex flex-wrap gap-3">
             {isCreator ? (
                <>
+                 <button
+                   onClick={handleTogglePublish}
+                   className={`px-4 py-2 font-bold border-[3px] border-black rounded-xl shadow-[4px_4px_0px_0px_#111] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#111] transition-all flex items-center gap-2 ${
+                     isPublished 
+                       ? "bg-[#A7E2D1] text-black" // Green for Published
+                       : "bg-white text-gray-500" // White/Gray for Draft
+                   }`}
+                 >
+                   <div className={`w-3 h-3 rounded-full border-2 border-black ${isPublished ? "bg-[#F26B4D]" : "bg-gray-400"}`}></div>
+                   {isPublished ? "Published" : "Draft"}
+                 </button>
+
                  <Button variant="secondary" onClick={() => setIsCourseModalOpen(true)} className="px-6 rounded-xl border-[3px]">Edit</Button>
                  <Button variant="accent" onClick={() => {setEditingModule(null); setIsModuleModalOpen(true);}} className="px-6 rounded-xl border-[3px]">Add Module</Button>
                  <Button variant="primary" onClick={() => setIsEnrollmentsModalOpen(true)} className="px-6 rounded-xl border-[3px] bg-[#87CEFA]">Students</Button>
+                 
                  <button onClick={handleDeleteCourse} className="px-6 py-4 border-[3px] border-black rounded-xl font-bold bg-white text-red-500 hover:bg-red-50 shadow-[4px_4px_0px_0px_#111] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#111]">
                    <Trash2 size={18} />
                  </button>
@@ -226,13 +255,12 @@ const handleDeleteModule = async (moduleId) => {
         ))}
       </div>
 
-      {/* --- PASSING EXPLICIT isEnrolled STATE --- */}
      <MediaViewerModal
-  content={activeContent}
-  courseId={course.id}
-  isEnrolled={canAccessContent}   // was just isEnrolled
-  onClose={() => setActiveContent(null)}
-/>
+      content={activeContent}
+      courseId={course.id}
+      isEnrolled={canAccessContent}
+      onClose={() => setActiveContent(null)}
+    />
       
       {/* Educator Modals */}
       <CourseModal isOpen={isCourseModalOpen} onClose={() => setIsCourseModalOpen(false)} course={course} onSave={loadCourseData} />
