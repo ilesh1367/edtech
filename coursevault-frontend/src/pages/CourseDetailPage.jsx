@@ -48,7 +48,7 @@ export default function CourseDetailPage() {
   const [editingModule, setEditingModule] = useState(null);
   const [contentModalTab, setContentModalTab] = useState('pdf');
 
- const loadCourseData = async () => {
+  const loadCourseData = async () => {
     setIsLoading(true);
     try {
       // 1. Fetch Course Data
@@ -60,11 +60,10 @@ export default function CourseDetailPage() {
           setExpandedModules([data.modules[0].id]);
       }
 
-      // 2. FIX: Use the backend's absolute source of truth for enrollment
+      // 2. Use the backend's absolute source of truth for enrollment
       if (user?.role === 'educator') {
           setIsEnrolled(true);
       } else {
-          // The backend /courses/:id route already accurately calculates this!
           setIsEnrolled(!!data.course.isEnrolled);
       }
       
@@ -80,14 +79,11 @@ export default function CourseDetailPage() {
   if (isLoading) return <div className="text-center font-bold py-20 text-gray-400">Loading...</div>;
   if (!course) return <div className="text-center font-bold py-20 text-red-500">Course not found.</div>;
 
-  // FIX: Derive the state directly from the database's string status
   const isPublished = course.status === 'published';
 
   const handleTogglePublish = async () => {
     try {
       const newStatusStr = isPublished ? 'draft' : 'published';
-      
-      // Optimistically update the UI status string
       setCourse({ ...course, status: newStatusStr });
 
       await fetchAPI(`/courses/${course.id}/publish`, {
@@ -103,7 +99,7 @@ export default function CourseDetailPage() {
   };
 
   const handleEnroll = async () => {
-    setIsEnrolling(true);
+    setIsRunning(true);
     try {
         const orderData = await fetchAPI('/payments/create-order', { 
             method: 'POST', 
@@ -207,8 +203,8 @@ export default function CourseDetailPage() {
                    onClick={handleTogglePublish}
                    className={`px-4 py-2 font-bold border-[3px] border-black rounded-xl shadow-[4px_4px_0px_0px_#111] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#111] transition-all flex items-center gap-2 ${
                      isPublished 
-                       ? "bg-[#A7E2D1] text-black" // Green for Published
-                       : "bg-white text-gray-500" // White/Gray for Draft
+                       ? "bg-[#A7E2D1] text-black" 
+                       : "bg-white text-gray-500" 
                    }`}
                  >
                    <div className={`w-3 h-3 rounded-full border-2 border-black ${isPublished ? "bg-[#F26B4D]" : "bg-gray-400"}`}></div>
@@ -251,6 +247,12 @@ export default function CourseDetailPage() {
             onAddPDF={(mId) => { setActiveModuleId(mId); setContentModalTab('pdf'); setIsContentModalOpen(true); }}
             onEditModule={(mod) => { setEditingModule(mod); setIsModuleModalOpen(true); }}
             onDeleteModule={handleDeleteModule}
+            
+            // 🌟 FIXED PROPS PASSED HERE:
+            courseId={course.id}
+            isEnrolled={isEnrolled}
+            
+            onRefreshCurriculum={loadCourseData} 
           />
         ))}
       </div>

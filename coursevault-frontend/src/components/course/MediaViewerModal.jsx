@@ -12,10 +12,16 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
   
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
+  const currentPosRef = useRef(0);
 
-  // 1. MAIN MEDIA FETCH HOOK
+  const targetContentId = content?.id;
+  const rawContentType = content?.content_type || '';
+  const type = String(rawContentType).toLowerCase();
+
   useEffect(() => {
-    if (!content) return;
+    if (!targetContentId) return;
+    
+    let isCancelled = false;
     setLoading(true);
     setStreamUrl(null);
     setPdfUrl(null);
@@ -23,36 +29,42 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
 
     const initMedia = async () => {
       try {
-        const type = content.content_type?.toLowerCase() || '';
-
         if (type.includes('video')) {
-          const streamData = await fetchAPI(`/content/${content.id}/stream?courseId=${courseId || ''}`);
+          const streamData = await fetchAPI(`/content/${targetContentId}/stream?courseId=${courseId || ''}`);
           
           let initialPos = 0;
           if (courseId && isEnrolled) {
             try {
-              const progressData = await fetchAPI(`/video/progress/${content.id}`);
+              const progressData = await fetchAPI(`/video/progress/${targetContentId}`);
               if (progressData.hasProgress) {
                 initialPos = parseFloat(progressData.position);
-                setSavedPosition(initialPos);
               }
             } catch (_) {}
           }
 
+          if (isCancelled) return;
+          
+          setSavedPosition(initialPos);
+          currentPosRef.current = initialPos;
+
           if (streamData.hlsUrl) {
             const token = localStorage.getItem('token');
-            const backendDomain = import.meta.env.VITE_API_URL 
+            const backendDomain = (import.meta && import.meta.env && import.meta.env.VITE_API_URL) 
               ? import.meta.env.VITE_API_URL.replace('/api', '') 
               : 'http://localhost:3000';
             
             setStreamUrl(`${backendDomain}${streamData.hlsUrl}&token=${token}`);
+            // 🌟 FIX: Turn off loading state once video stream URL maps successfully
+            setLoading(false); 
+          } else {
+            throw new Error(streamData.message || 'Video processing is pending.');
           }
 
         } else if (type.includes('pdf') || type.includes('document')) {
           const token = localStorage.getItem('token');
-          const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+          const baseUrl = (import.meta && import.meta.env && import.meta.env.VITE_API_URL) || 'http://localhost:3000/api';
 
-          const response = await fetch(`${baseUrl}/content/${content.id}/pdf?courseId=${courseId || ''}`, {
+          const response = await fetch(`${baseUrl}/content/${targetContentId}/pdf?courseId=${courseId || ''}`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
 
@@ -62,92 +74,108 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
           }
 
           const rawBlob = await response.blob();
-          
+          if (isCancelled) return;
+
           const pdfBlob = new Blob([rawBlob], { type: 'application/pdf' });
           const objectUrl = URL.createObjectURL(pdfBlob);
           
-          // FIX: Append URL parameters to disable the native browser toolbar and download buttons
           setPdfUrl(`${objectUrl}#toolbar=0&navpanes=0&scrollbar=0`);
+          // 🌟 FIX: Turn off loading state once Blob streaming object URL mounts successfully
+          setLoading(false); 
           
         } else {
-          throw new Error(`Unknown content type received from database: "${content.content_type}"`);
+          throw new Error(`Unknown content type configuration: "${rawContentType}"`);
         }
       } catch (err) {
-        console.error('Failed to load media:', err);
-        setError(err.message || 'Failed to load content');
-      } finally {
-        setLoading(false);
+        if (!isCancelled) {
+          console.error('Failed to load media:', err);
+          setError(err.message || 'Failed to load content');
+          setLoading(false); // 🌟 Turn off loading on errors too
+        }
       }
     };
 
     initMedia();
-  }, [content, courseId, isEnrolled]);
+    
+    return () => {
+      isCancelled = true;
+    };
+  }, [targetContentId, type, courseId, isEnrolled]);
 
-  // 2. THE HLS.JS STREAMING HOOK
   useEffect(() => {
-    const type = content?.content_type?.toLowerCase() || '';
     if (!streamUrl || !videoRef.current || !type.includes('video')) return;
+
+    const videoEl = videoRef.current;
+    const syncTime = () => {
+      currentPosRef.current = videoEl.currentTime;
+    };
+    videoEl.addEventListener('timeupdate', syncTime);
 
     if (Hls.isSupported()) {
       const hls = new Hls({ maxMaxBufferLength: 30 });
       hlsRef.current = hls;
 
       hls.loadSource(streamUrl);
-      hls.attachMedia(videoRef.current);
+      hls.attachMedia(videoEl);
       
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (savedPosition > 0) videoRef.current.currentTime = savedPosition;
-        videoRef.current.play().catch(e => console.log("Auto-play blocked:", e));
+        if (savedPosition > 0) videoEl.currentTime = savedPosition;
+        videoEl.play().catch(e => console.log("Auto-play blocked:", e));
       });
 
       return () => {
+        videoEl.removeEventListener('timeupdate', syncTime);
         hls.destroy();
       };
-    } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-      videoRef.current.src = streamUrl;
-      videoRef.current.addEventListener('loadedmetadata', () => {
-        if (savedPosition > 0) videoRef.current.currentTime = savedPosition;
-        videoRef.current.play().catch(e => console.log("Auto-play blocked:", e));
-      });
+    } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+      videoEl.src = streamUrl;
+      
+      const handleMetadata = () => {
+        if (savedPosition > 0) videoEl.currentTime = savedPosition;
+        videoEl.play().catch(e => console.log("Auto-play blocked:", e));
+      };
+      
+      videoEl.addEventListener('loadedmetadata', handleMetadata);
+      return () => {
+        videoEl.removeEventListener('timeupdate', syncTime);
+        videoEl.removeEventListener('loadedmetadata', handleMetadata);
+      };
     }
-  }, [streamUrl, savedPosition, content]);
-
-  // 3. VIDEO PROGRESS HOOK
-  const saveProgressToDB = async (trigger = 'Interval') => {
-    const type = content?.content_type?.toLowerCase() || '';
-    if (!content || !type.includes('video')) return;
-    if (!courseId || !isEnrolled || !videoRef.current) return;
-    const currentPos = Math.round(videoRef.current.currentTime);
-    if (currentPos <= 0) return;
-
-    try {
-      await fetchAPI('/video/progress', {
-        method: 'POST',
-        body: JSON.stringify({ contentId: content.id, courseId, position: currentPos }),
-      });
-    } catch (err) {
-      console.error(`Save failed [${trigger}]:`, err.message);
-    }
-  };
+  }, [streamUrl, savedPosition, type]);
 
   useEffect(() => {
-    const type = content?.content_type?.toLowerCase() || '';
-    if (!content || !type.includes('video') || !courseId || !isEnrolled) return;
+    if (!targetContentId || !type.includes('video') || !courseId || !isEnrolled) return;
+
+    const saveProgressToDB = async (posToSave) => {
+      const currentPos = Math.round(posToSave);
+      if (currentPos <= 0) return;
+
+      try {
+        await fetchAPI('/video/progress', {
+          method: 'POST',
+          body: JSON.stringify({ contentId: targetContentId, courseId, position: currentPos }),
+        });
+      } catch (err) {
+        console.error(`Analytics sync failure:`, err.message);
+      }
+    };
 
     const intervalId = setInterval(() => {
-      if (videoRef.current && !videoRef.current.paused) saveProgressToDB('Interval');
+      if (videoRef.current && !videoRef.current.paused) {
+        saveProgressToDB(currentPosRef.current);
+      }
     }, 5000);
 
     return () => {
       clearInterval(intervalId);
-      saveProgressToDB('Modal Close');
+      if (currentPosRef.current > 0) {
+        saveProgressToDB(currentPosRef.current);
+      }
     };
-  }, [content, courseId, isEnrolled]);
+  }, [targetContentId, type, courseId, isEnrolled]);
 
-  // 4. PDF MEMORY CLEANUP HOOK
   useEffect(() => {
     return () => {
-      // We must split the URL to safely revoke just the blob address, ignoring our injected # hash parameters
       if (pdfUrl) {
         const rawBlobUrl = pdfUrl.split('#')[0];
         URL.revokeObjectURL(rawBlobUrl);
@@ -155,33 +183,35 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
     };
   }, [pdfUrl]);
 
-  if (!content) return null;
+  if (!content || !content.id) return null;
   
-  const type = content.content_type?.toLowerCase() || '';
   const isVideo = type.includes('video');
   const isPdf = type.includes('pdf') || type.includes('document');
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-[#FDF1E9]/90 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <div className="relative w-full max-w-5xl bg-white border-[3px] border-black rounded-[24px] shadow-[8px_8px_0px_0px_#111] overflow-hidden flex flex-col max-h-[90vh]">
+        
         <div className="flex justify-between items-center p-4 border-b-[3px] border-black bg-[#A7E2D1]">
           <h3 className="font-black text-xl tracking-tight uppercase line-clamp-1">
-            {content.title}
+            {content.title || 'Viewing Asset File'}
           </h3>
           <button
             onClick={onClose}
-            className="w-10 h-10 border-[3px] border-black bg-[#F26B4D] rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-[2px_2px_0px_0px_#111]"
+            className="w-10 h-10 border-[3px] border-black bg-[#F26B4D] rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-[2px_2px_0px_0px_#111] outline-none"
           >
             <X size={20} strokeWidth={3} />
           </button>
         </div>
+        
         <div className="flex-1 bg-[#F4F4F4] relative overflow-hidden flex items-center justify-center min-h-[60vh]">
           {loading && (
-            <div className="flex flex-col items-center justify-center font-bold text-gray-500 gap-3">
+            <div className="absolute inset-0 flex flex-col items-center justify-center font-bold text-gray-500 gap-3 bg-[#F4F4F4] z-50">
               <Loader className="animate-spin text-[#F26B4D]" size={40} strokeWidth={3} />
-              Loading Media...
+              Mounting secure media stream...
             </div>
           )}
+          
           {error && !loading && (
             <div className="flex flex-col items-center justify-center font-bold text-red-500 gap-3 p-8 text-center">
               <p>Failed to load content.</p>
@@ -194,14 +224,14 @@ export default function MediaViewerModal({ content, courseId, isEnrolled, onClos
               ref={videoRef}
               controls
               controlsList="nodownload" 
-              className="w-full h-full max-h-[75vh] object-contain bg-black"
+              className="w-full h-full max-h-[75vh] object-contain bg-black outline-none"
             />
           )}
           
           {!loading && !error && isPdf && pdfUrl && (
             <iframe
               src={pdfUrl}
-              title={content.title}
+              title={content.title || 'PDF Viewframe'}
               className="w-full bg-white"
               style={{ height: '75vh', border: 'none' }}
             />

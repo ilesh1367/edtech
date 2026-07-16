@@ -1,6 +1,13 @@
 import express from "express";
 import pool from "../config/database.js";
 import authMiddleware from "../middleware/auth.js";
+import ffmpeg from 'fluent-ffmpeg';
+import { path as ffmpegPath } from '@ffmpeg-installer/ffmpeg';
+import { path as ffprobePath } from '@ffprobe-installer/ffprobe';
+
+// Link the binary paths so fluent-ffmpeg can find ffprobe/ffmpeg on Windows
+ffmpeg.setFfmpegPath(ffmpegPath);
+ffmpeg.setFfprobePath(ffprobePath);
 
 const router = express.Router();
 
@@ -9,6 +16,7 @@ router.post("/progress", authMiddleware, async (req, res) => {
     try {
         const { contentId, courseId, position } = req.body;
         const userId = req.user.id;
+        const userRole = req.user.role;
         
         if (!contentId || !courseId) {
             return res.status(400).json({ error: "contentId and courseId are required" });
@@ -18,15 +26,28 @@ router.post("/progress", authMiddleware, async (req, res) => {
             return res.status(400).json({ error: "valid position is required" });
         }
         
-        const enrollmentCheck = await pool.query(
-            `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND status = 'active'`,
-            [userId, courseId]
+        // 1. Check if the user is the creator of the course
+        const courseCheck = await pool.query(
+            `SELECT educator_id FROM courses WHERE id = $1`,
+            [courseId]
         );
         
-        if (enrollmentCheck.rows.length === 0) {
-            return res.status(403).json({ error: "Not enrolled in this course" });
+        const isCreator = courseCheck.rows.length > 0 && 
+                          (userRole === 'educator' && courseCheck.rows[0].educator_id === userId);
+
+        // 2. If NOT the creator, they MUST be enrolled actively
+        if (!isCreator) {
+            const enrollmentCheck = await pool.query(
+                `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND status = 'active'`,
+                [userId, courseId]
+            );
+            
+            if (enrollmentCheck.rows.length === 0) {
+                return res.status(403).json({ error: "Not authorized or enrolled in this course" });
+            }
         }
         
+        // 3. Upsert progress securely
         await pool.query(`
             INSERT INTO video_progress (user_id, content_id, course_id, position, updated_at)
             VALUES ($1, $2, $3, $4, NOW())

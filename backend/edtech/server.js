@@ -14,6 +14,7 @@ import paymentRoutes from "./routes/payments.js";
 import enrollmentRoutes from "./routes/enrollments.js";
 import videoRoutes from "./routes/video.js";
 import analyticsRoutes from "./routes/analytics.js";
+import quizRoutes from "./routes/quiz.js";
 // Import config
 import pool from "./config/database.js";
 import { r2Client, R2_BUCKET_NAME } from "./config/r2.js";
@@ -134,11 +135,37 @@ async function setupDatabase() {
             )
         `);
 
+        // --- NEW: Quiz tables ---
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS quizzes (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                module_id UUID REFERENCES modules(id) ON DELETE CASCADE,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                created_by UUID REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS quiz_questions (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                quiz_id UUID REFERENCES quizzes(id) ON DELETE CASCADE,
+                question_text TEXT NOT NULL,
+                options JSONB NOT NULL,
+                correct_option_index INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_modules_course_id ON modules(course_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_content_items_hash ON content_items(file_hash)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_courses_educator_id ON courses(educator_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_orders_order_id ON payment_orders(order_id)`);
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_video_progress_user_content ON video_progress(user_id, content_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_quizzes_module_id ON quizzes(module_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id)`);
 
         console.log("✅ Database schema ready");
     } catch (err) {
@@ -157,13 +184,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use((req, res, next) => {
     // 1. Force the browser to ALWAYS fetch fresh data (Fixes the "many refreshes" bug)
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-    
+
     // 2. Allows the browser to render the response in an iframe from the same origin
-    res.setHeader("X-Frame-Options", "SAMEORIGIN"); 
-    
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+
     // 3. Explicitly trust your actual production domain!
     res.setHeader("Content-Security-Policy", "frame-ancestors 'self' http://localhost:5173 https://sv.gridsphere.in");
-    
+
     next();
 });
 // ============================================
@@ -177,6 +204,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/enrollments", enrollmentRoutes);
 app.use("/api/video", videoRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/quiz", quizRoutes);
 // ============================================
 // HLS Proxy Route
 // ============================================
@@ -300,5 +328,7 @@ app.listen(PORT, () => {
     console.log(`   - /api/payments`);
     console.log(`   - /api/enrollments`);
     console.log(`   - /api/video`);
+    console.log(`   - /api/analytics`);
+    console.log(`   - /api/quiz`);
     console.log(`${"=".repeat(70)}\n`);
 });

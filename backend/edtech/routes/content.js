@@ -9,7 +9,11 @@ import pool from "../config/database.js";
 import { r2Client, R2_BUCKET_NAME } from "../config/r2.js";
 import authMiddleware from "../middleware/auth.js";
 import { generateFileHash, getFileExtension, getMimeType } from "../utils/helpers.js";
-import { PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+
+// Import local FFmpeg / FFprobe bin installers
+import { path as ffmpegPath } from "@ffmpeg-installer/ffmpeg";
+import { path as ffprobePath } from "@ffprobe-installer/ffprobe";
 
 const router = express.Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,7 +46,6 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
         const fileHash = generateFileHash(file.buffer);
         const extension = getFileExtension(file.originalname);
         
-        // FIX 1: Force fallback to application/pdf so R2 doesn't corrupt it as octet-stream
         const mimeType = getMimeType(file.originalname) || "application/pdf";
 
         const existing = await pool.query(`SELECT * FROM content_items WHERE file_hash = $1`, [fileHash]);
@@ -53,7 +56,6 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
         const hashPrefix = fileHash.slice(0, 6);
         const r2Key = `content/${hashPrefix}/${fileHash}${extension}`;
         
-        // The ContentType parameter is now guaranteed to be accurate
         await r2Client.send(new PutObjectCommand({ 
             Bucket: R2_BUCKET_NAME, 
             Key: r2Key, 
@@ -104,17 +106,35 @@ router.post("/upload-video", authMiddleware, upload.single("file"), async (req, 
         console.log(`💾 Saved temp: ${path.basename(tempFilePath)}`);
 
         let videoInfo = { width: 0, height: 0, duration: 0 };
+        let ffprobeAvailable = true;
+
         await new Promise((resolve) => {
-            const ffprobe = spawn("ffprobe", [
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-show_entries", "format=duration",
-                "-of", "json",
-                tempFilePath
-            ]);
+            let ffprobe;
+            try {
+                // Modified: Using absolute local ffprobePath installer reference
+                ffprobe = spawn(ffprobePath, [
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height",
+                    "-show_entries", "format=duration",
+                    "-of", "json",
+                    tempFilePath
+                ]);
+            } catch (spawnErr) {
+                console.error("❌ ffprobe not found — verification failed", spawnErr.message);
+                ffprobeAvailable = false;
+                return resolve();
+            }
+
             let output = "";
             ffprobe.stdout.on("data", d => { output += d.toString(); });
+
+            ffprobe.on("error", (err) => {
+                console.error("❌ ffprobe spawn failed:", err.message);
+                ffprobeAvailable = false;
+                resolve();
+            });
+
             ffprobe.on("close", () => {
                 try {
                     const data = JSON.parse(output);
@@ -129,6 +149,15 @@ router.post("/upload-video", authMiddleware, upload.single("file"), async (req, 
                 resolve();
             });
         });
+
+        if (!ffprobeAvailable) {
+            try { if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath); } catch (_) {}
+            return res.status(500).json({
+                success: false,
+                error: "FFmpeg/ffprobe path spawn failure. Check binary runtime installations."
+            });
+        }
+
         console.log(`📐 ${videoInfo.width}x${videoInfo.height}, ${videoInfo.duration}s`);
 
         const resolutions = [{ name: "480p", scale: "854:480", bitrate: "1000k" }];
@@ -208,16 +237,12 @@ router.get("/:id/status", async (req, res) => {
 });
 
 // GET /api/content/:id/pdf
-// GET /api/content/:id/pdf
-// GET /api/content/:id/pdf
-
-// GET /api/content/:id/pdf
 router.get("/:id/pdf", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const requestedCourseId = req.query.courseId; // <-- Grab context from frontend
+        const requestedCourseId = req.query.courseId; 
         
-        const result = await pool.query(`SELECT * FROM content_items WHERE id = $1`, [id]);
+        const result = await pool.query(`SELECT * FROM content_items WHERE id = $1 AND is_active = true`, [id]);
         if (result.rows.length === 0) return res.status(404).json({ error: "Content not found" });
         const content = result.rows[0];
 
@@ -238,8 +263,7 @@ router.get("/:id/pdf", authMiddleware, async (req, res) => {
             });
         }
         
-        // FIX: Relax the strict "pdf" check to allow "application/pdf" and other variations
-        const type = content.content_type?.toLowerCase() || "";
+        const type = String(content.content_type).toLowerCase();
         if (!type.includes("pdf") && !type.includes("document")) {
             return res.status(400).json({ error: `Not a PDF file (Found type: ${content.content_type})` });
         }
@@ -262,19 +286,17 @@ router.get("/:id/pdf", authMiddleware, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// GET /api/content/:id/stream
-// GET /api/content/:id/stream
+
 // GET /api/content/:id/stream
 router.get("/:id/stream", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        const requestedCourseId = req.query.courseId; // <-- Grab context from frontend
+        const requestedCourseId = req.query.courseId; 
         
-        const result = await pool.query(`SELECT * FROM content_items WHERE id = $1`, [id]);
+        const result = await pool.query(`SELECT * FROM content_items WHERE id = $1 AND is_active = true`, [id]);
         if (result.rows.length === 0) return res.status(404).json({ error: "Content not found" });
         const content = result.rows[0];
 
-        // FIX: If the user owns the course this is being viewed from, grant immediate access
         let isCourseOwner = false;
         if (requestedCourseId) {
              const cCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [requestedCourseId]);
@@ -292,7 +314,8 @@ router.get("/:id/stream", authMiddleware, async (req, res) => {
             });
         }
 
-        if (content.content_type !== "video") return res.status(400).json({ error: "Not a video" });
+        const type = String(content.content_type).toLowerCase();
+        if (!type.includes("video")) return res.status(400).json({ error: "Not a video" });
 
         if (content.status !== "ready") {
             return res.status(202).json({
@@ -381,7 +404,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
         const { id } = req.params;
         
         const contentCheck = await pool.query(`
-            SELECT c.educator_id 
+            SELECT ci.*, c.educator_id 
             FROM content_items ci
             JOIN modules m ON ci.id = ANY(m.content_ids)
             JOIN courses c ON m.course_id = c.id
@@ -390,18 +413,51 @@ router.delete("/:id", authMiddleware, async (req, res) => {
         `, [id]);
         
         if (contentCheck.rows.length === 0) {
-            return res.status(404).json({ error: "Content not found" });
+            return res.status(404).json({ error: "Content asset not found" });
         }
         
-        if (contentCheck.rows[0].educator_id !== req.user.id) {
-            return res.status(403).json({ error: "Only course creator can delete content" });
+        const contentItem = contentCheck.rows[0];
+        
+        if (contentItem.educator_id !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: "Only the course creator can wipe content assets" });
+        }
+        
+        if (contentItem.r2_key) {
+            try {
+                const type = String(contentItem.content_type).toLowerCase();
+                if (type.includes("video")) {
+                    const baseFolderPrefix = contentItem.r2_key.replace("/master.m3u8", "");
+                    const listedObjects = await r2Client.send(new ListObjectsV2Command({
+                        Bucket: R2_BUCKET_NAME,
+                        Prefix: baseFolderPrefix
+                    }));
+                    
+                    if (listedObjects.Contents && listedObjects.Contents.length > 0) {
+                        for (const object of listedObjects.Contents) {
+                            await r2Client.send(new DeleteObjectCommand({
+                                Bucket: R2_BUCKET_NAME,
+                                Key: object.Key
+                            }));
+                        }
+                    }
+                } else {
+                    await r2Client.send(new DeleteObjectCommand({
+                        Bucket: R2_BUCKET_NAME,
+                        Key: contentItem.r2_key
+                    }));
+                }
+                console.log(`🧹 Cloudflare R2 Storage cleaned up cleanly for item key: ${contentItem.r2_key}`);
+            } catch (r2Err) {
+                console.error("⚠️ Failed to purge file cleanly from R2 bucket storage:", r2Err.message);
+            }
         }
         
         await pool.query(`
             UPDATE content_items 
             SET is_active = false, 
+                r2_key = NULL,
                 updated_at = NOW()
-            WHERE id = $1 AND is_active = true
+            WHERE id = $1
         `, [id]);
         
         await pool.query(`
@@ -410,7 +466,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
             WHERE $1 = ANY(content_ids)
         `, [id]);
         
-        res.json({ success: true, message: "Content deactivated successfully" });
+        res.json({ success: true, message: "Asset purged from storage and active course structures cleanly!" });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -438,7 +494,8 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
             console.log(`\n🎬 Transcoding ${resName}...`);
 
             await new Promise((resolve, reject) => {
-                const ffmpeg = spawn("ffmpeg", [
+                // Modified: Using absolute local ffmpegPath installer reference
+                const ffmpeg = spawn(ffmpegPath, [
                     "-i", inputPath,
                     "-vf", `scale=${scale}`,
                     "-c:v", "libx264", "-preset", "medium",
@@ -463,13 +520,15 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
 
                 ffmpeg.on("close", (code) => {
                     if (code === 0) {
-                        console.log(`✅ ${resName} ffmpeg done`);
+                        console.log(`%c✅ ${resName} ffmpeg done`, "color: green");
                         resolve();
                     } else {
                         reject(new Error(`ffmpeg exited ${code} for ${resName}`));
                     }
                 });
-                ffmpeg.on("error", reject);
+                ffmpeg.on("error", (err) => {
+                    reject(new Error(`ffmpeg spawn failed: ${err.message}`));
+                });
             });
 
             const allFiles = fs.readdirSync(qualityDir).sort();
