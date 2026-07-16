@@ -190,25 +190,22 @@ export default function EducatorDashboardPage() {
                     </div>
                   </div>
 
-                  {/* Only render the detailed card(s) for the course that's currently selected:
-                      the parent's own card plus every course linked to it. */}
+                  {/* Only render the child courses (subjects) belonging to this parent */}
                   {isSelected && selectedCourse && (
                     <div className="mt-6 mb-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16 items-start">
-                      <CourseCard
-                        course={selectedCourse}
-                        index={0}
-                        isMyLearning={false}
-                        onClick={(id) => navigate(`/course/${id}`)}
-                      />
-                      {selectedChildCourses.map((child, i) => (
-                        <CourseCard
-                          key={child.id}
-                          course={child}
-                          index={i + 1}
-                          isMyLearning={false}
-                          onClick={(id) => navigate(`/course/${id}`)}
-                        />
-                      ))}
+                      {selectedChildCourses.length === 0 ? (
+                        <p className="text-gray-500 font-bold italic col-span-full pt-4">No subjects added to this class yet.</p>
+                      ) : (
+                        selectedChildCourses.map((child, i) => (
+                          <CourseCard
+                            key={child.id}
+                            course={child}
+                            index={i}
+                            isMyLearning={false}
+                            onClick={(id) => navigate(`/course/${id}`)}
+                          />
+                        ))
+                      )}
                     </div>
                   )}
                 </div>

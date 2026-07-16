@@ -211,6 +211,75 @@ router.get("/", async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// GET /api/content/folders/:moduleId
+// Retrieves all folders for a specific module
+router.get("/folders/:moduleId", async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT * FROM folders WHERE module_id = $1 ORDER BY created_at ASC`,
+            [req.params.moduleId]
+        );
+        res.json({ success: true, folders: result.rows });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/content/folder
+// Creates a new folder inside a module
+router.post("/folder", authMiddleware, async (req, res) => {
+    const { module_id, title } = req.body;
+    try {
+        const result = await pool.query(
+            `INSERT INTO folders (module_id, title) VALUES ($1, $2) RETURNING *`,
+            [module_id, title]
+        );
+        res.json({ success: true, folder: result.rows[0] });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// PUT /api/content/bulk-move
+// Moves an array of content IDs into a specific folder
+router.put("/bulk-move", authMiddleware, async (req, res) => {
+    const { content_ids, folder_id } = req.body; 
+    try {
+        const result = await pool.query(
+            `UPDATE content_items SET folder_id = $2 WHERE id = ANY($1::uuid[]) RETURNING id, folder_id`,
+            [content_ids, folder_id]
+        );
+        res.json({ success: true, updated: result.rows });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+// PUT /api/content/folder/:id
+// Rename a folder
+router.put("/folder/:id", authMiddleware, async (req, res) => {
+    try {
+        const { title } = req.body;
+        const result = await pool.query(
+            `UPDATE folders SET title = $1 WHERE id = $2 RETURNING *`,
+            [title, req.params.id]
+        );
+        res.json({ success: true, folder: result.rows[0] });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// DELETE /api/content/folder/:id
+// Delete a folder (contents safely return to the main tab due to ON DELETE SET NULL)
+router.delete("/folder/:id", authMiddleware, async (req, res) => {
+    try {
+        await pool.query(`DELETE FROM folders WHERE id = $1`, [req.params.id]);
+        res.json({ success: true, message: "Folder deleted" });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 
 // GET /api/content/:id
 router.get("/:id", async (req, res) => {
@@ -629,5 +698,8 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
         }
     }
 }
+// GET /api/content/folders/:moduleId
+
+
 
 export default router;
