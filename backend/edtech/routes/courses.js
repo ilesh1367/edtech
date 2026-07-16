@@ -1,11 +1,8 @@
-import express from "express";
-import jwt from "jsonwebtoken";
+﻿import express from "express";
 import pool from "../config/database.js";
 import authMiddleware from "../middleware/auth.js";
 
 const router = express.Router();
-// FIX 1: Add the fallback secret so jwt.verify doesn't crash
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
 
 // GET /api/courses
 router.get("/", async (req, res) => {
@@ -28,13 +25,13 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
     try {
         const userId = req.user.id;
         const userRole = req.user.role;
-        
+
         let courses = [];
-        
-        if (userRole === 'student') {
+
+        if (userRole === "student") {
             const result = await pool.query(`
-                SELECT 
-                    c.*, 
+                SELECT
+                    c.*,
                     u.name as educator_name,
                     e.enrolled_at,
                     e.progress,
@@ -43,17 +40,17 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
                 FROM enrollments e
                 JOIN courses c ON e.course_id = c.id
                 JOIN users u ON c.educator_id = u.id
-                WHERE e.user_id = $1 
+                WHERE e.user_id = $1
                     AND e.status = 'active'
                     AND c.status = 'published'
                     AND c.deleted_at IS NULL
                 ORDER BY e.enrolled_at DESC
             `, [userId]);
             courses = result.rows;
-        } else if (userRole === 'educator') {
+        } else if (userRole === "educator") {
             const result = await pool.query(`
-                SELECT 
-                    c.*, 
+                SELECT
+                    c.*,
                     u.name as educator_name,
                     COUNT(DISTINCT e.user_id) as total_students,
                     COUNT(DISTINCT m.id) as total_modules,
@@ -69,10 +66,10 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
                 ORDER BY c.created_at DESC
             `, [userId]);
             courses = result.rows;
-        } else if (userRole === 'admin') {
+        } else if (userRole === "admin") {
             const result = await pool.query(`
-                SELECT 
-                    c.*, 
+                SELECT
+                    c.*,
                     u.name as educator_name,
                     COUNT(DISTINCT e.user_id) as total_students
                 FROM courses c
@@ -84,12 +81,12 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
             `);
             courses = result.rows;
         }
-        
-        res.json({ 
-            success: true, 
+
+        res.json({
+            success: true,
             role: userRole,
             count: courses.length,
-            courses 
+            courses
         });
     } catch (err) {
         console.error("My courses error:", err);
@@ -98,59 +95,37 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
 });
 
 // GET /api/courses/:id
-// GET /api/courses/:id
 router.get("/:id", async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // 1. Identify the user FIRST
-        let userId = null;
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith("Bearer ")) {
-            try {
-                const token = authHeader.split(" ")[1];
-                const decoded = jwt.verify(token, JWT_SECRET);
-                userId = decoded.id;
-            } catch (err) {
-                console.error("Token verification failed silently:", err.message);
-            } 
-        }
 
-        // 2. Fetch the course WITHOUT the 'published' restriction
         const courseResult = await pool.query(`
             SELECT c.*, u.name as educator_name
             FROM courses c
             JOIN users u ON c.educator_id = u.id
-            WHERE c.id = $1 AND c.is_active = true
+            WHERE c.id = $1 AND c.status = 'published' AND c.is_active = true
         `, [id]);
-        
+
         if (courseResult.rows.length === 0) {
             return res.status(404).json({ error: "Course not found" });
         }
-        
-        const course = courseResult.rows[0];
-        const isCreator = userId === course.educator_id;
 
-        // 3. Security Check: Block students from seeing drafts, but let the creator in
-        if (course.status !== 'published' && !isCreator) {
-            return res.status(404).json({ error: "Course not found" });
-        }
-        
-        // 4. Fetch Modules
+        const course = courseResult.rows[0];
+
         const modulesResult = await pool.query(`
-            SELECT * FROM modules 
-            WHERE course_id = $1 AND is_active = true 
+            SELECT * FROM modules
+            WHERE course_id = $1
             ORDER BY module_order ASC
         `, [id]);
-        
+
         const modules = [];
         for (const module of modulesResult.rows) {
             let contents = [];
             if (module.content_ids && module.content_ids.length > 0) {
                 const contentResult = await pool.query(`
-                    SELECT id, title, description, content_type, duration_seconds, 
-                           thumbnail_url, preview, created_at, file_size_bytes
-                    FROM content_items 
+                    SELECT id, title, description, content_type, duration_seconds,
+                           thumbnail_url, preview, created_at
+                    FROM content_items
                     WHERE id = ANY($1::uuid[])
                     AND status = 'ready'
                 `, [module.content_ids]);
@@ -158,72 +133,86 @@ router.get("/:id", async (req, res) => {
             }
             modules.push({ ...module, contents });
         }
-        
-        // 5. FIX: Check strictly for ACTIVE Enrollment status
+
         let isEnrolled = false;
-        if (userId && !isCreator) {
-            const enrollmentCheck = await pool.query(
-                `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND status = 'active'`, // <-- ADDED status = 'active'
-                [userId, id]
-            );
-            isEnrolled = enrollmentCheck.rows.length > 0;
+        let isCreator = false;
+
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith("Bearer ")) {
+            try {
+                const token = authHeader.split(" ")[1];
+                const decoded = jwt.verify(token, JWT_SECRET);
+
+                const enrollmentCheck = await pool.query(
+                    `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
+                    [decoded.id, id]
+                );
+                isEnrolled = enrollmentCheck.rows.length > 0;
+                isCreator = course.educator_id === decoded.id;
+            } catch (err) {}
         }
-        
-        res.json({ 
-            success: true, 
+
+        res.json({
+            success: true,
             course: {
                 ...course,
                 isEnrolled,
                 isCreator
             },
-            modules 
+            modules
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
 // POST /api/courses
 router.post("/", authMiddleware, async (req, res) => {
     try {
-        if (req.user.role !== 'educator' && req.user.role !== 'admin') {
+        if (req.user.role !== "educator" && req.user.role !== "admin") {
             return res.status(403).json({ error: "Only educators can create courses" });
         }
 
-        const { title, description, price, status } = req.body;
-        
+        // DEBUG LOG - remove later once confirmed working.
+        console.log("POST /courses received body:", req.body);
+
+        const { title, description, price, status, parent_course_id } = req.body;
+
         const client = await pool.connect();
-        
+
         try {
-            await client.query('BEGIN');
-            
+            await client.query("BEGIN");
+
             const courseResult = await client.query(`
-                INSERT INTO courses (educator_id, title, description, price, status, is_active)
-                VALUES ($1, $2, $3, $4, $5, true) RETURNING *
-            `, [req.user.id, title, description, price || 0, status || "draft"]);
-            
+                INSERT INTO courses (educator_id, title, description, price, status, is_active, parent_course_id)
+                VALUES ($1, $2, $3, $4, $5, true, $6) RETURNING *
+            `, [req.user.id, title, description, price || 0, status || "draft", parent_course_id || null]);
+
             const course = courseResult.rows[0];
-            
+
+            console.log("Course created with parent_course_id:", course.parent_course_id);
+
             const moduleResult = await client.query(`
                 INSERT INTO modules (course_id, title, description, module_order, content_ids, is_active)
                 VALUES ($1, $2, $3, $4, $5, true) RETURNING *
             `, [course.id, "Preview Module", "Course preview content - get a glimpse of what you'll learn", 0, []]);
-            
-            await client.query('COMMIT');
-            
-            res.status(201).json({ 
-                success: true, 
+
+            await client.query("COMMIT");
+
+            res.status(201).json({
+                success: true,
                 course: course,
                 previewModule: moduleResult.rows[0],
                 message: "Course created with preview module"
             });
-            
+
         } catch (err) {
-            await client.query('ROLLBACK');
+            await client.query("ROLLBACK");
             throw err;
         } finally {
             client.release();
         }
-        
+
     } catch (err) {
         console.error("Course creation error:", err);
         res.status(500).json({ success: false, error: err.message });
@@ -234,18 +223,13 @@ router.post("/", authMiddleware, async (req, res) => {
 router.put("/:id", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // FIX 2: Explicitly check database ownership instead of relying on a ghost variable
-        const courseCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [id]);
-        if (courseCheck.rows.length === 0) {
-            return res.status(404).json({ error: "Course not found" });
-        }
-        if (courseCheck.rows[0].educator_id !== req.user.id) {
+
+        if (!req.isCourseCreator) {
             return res.status(403).json({ error: "Only course creator can update courses" });
         }
-        
+
         const { title, description, price, status } = req.body;
-        
+
         const result = await pool.query(`
             UPDATE courses
             SET title = COALESCE($1, title),
@@ -256,7 +240,7 @@ router.put("/:id", authMiddleware, async (req, res) => {
             WHERE id = $5
             RETURNING *
         `, [title, description, price, status, id]);
-        
+
         res.json({ success: true, course: result.rows[0] });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -267,32 +251,32 @@ router.put("/:id", authMiddleware, async (req, res) => {
 router.delete("/:id", authMiddleware, async (req, res) => {
     try {
         const courseId = req.query.courseId || req.params.id;
-        
+
         if (!courseId) {
             return res.status(400).json({ error: "courseId is required" });
         }
-        
+
         const courseCheck = await pool.query(
             `SELECT educator_id FROM courses WHERE id = $1 AND is_active = true`,
             [courseId]
         );
-        
+
         if (courseCheck.rows.length === 0) {
             return res.status(404).json({ error: "Course not found or already deleted" });
         }
-        
+
         if (courseCheck.rows[0].educator_id !== req.user.id) {
             return res.status(403).json({ error: "Only course creator can delete courses" });
         }
-        
+
         await pool.query(`
-            UPDATE courses 
-            SET is_active = false, 
+            UPDATE courses
+            SET is_active = false,
                 status = 'deleted',
                 updated_at = NOW()
             WHERE id = $1 AND is_active = true
         `, [courseId]);
-        
+
         res.json({ success: true, message: "Course deactivated successfully" });
     } catch (err) {
         console.error("Delete course error:", err);
@@ -304,64 +288,26 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 router.post("/:id/reactivate", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // FIX 3: Explicit ownership check
-        const courseCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [id]);
-        if (courseCheck.rows.length === 0) {
-            return res.status(404).json({ error: "Course not found" });
-        }
-        if (courseCheck.rows[0].educator_id !== req.user.id) {
+
+        if (!req.isCourseCreator) {
             return res.status(403).json({ error: "Only course creator can reactivate" });
         }
-        
+
         const result = await pool.query(`
-            UPDATE courses 
-            SET is_active = true, 
+            UPDATE courses
+            SET is_active = true,
                 status = 'draft',
                 updated_at = NOW()
             WHERE id = $1 AND is_active = false
             RETURNING id
         `, [id]);
-        
+
         if (result.rows.length === 0) {
             return res.status(404).json({ error: "Course not found or already active" });
         }
-        
+
         res.json({ success: true, message: "Course reactivated successfully" });
     } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// PUT /api/courses/:id/publish
-// PUT /api/courses/:id/publish
-router.put("/:id/publish", authMiddleware, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { is_published } = req.body; // true or false from React
-
-        // FIX: Map the boolean from React to the actual database 'status' text
-        const newStatus = is_published ? 'published' : 'draft';
-
-        // 1. Verify the course exists and the user actually owns it
-        const courseCheck = await pool.query(`SELECT educator_id FROM courses WHERE id = $1`, [id]);
-        
-        if (courseCheck.rows.length === 0) {
-            return res.status(404).json({ error: "Course not found" });
-        }
-        
-        if (courseCheck.rows[0].educator_id !== req.user.id) {
-            return res.status(403).json({ error: "Unauthorized: Only the creator can publish this course" });
-        }
-
-        // 2. Update the 'status' column (NOT is_published)
-        const result = await pool.query(
-            `UPDATE courses SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-            [newStatus, id]
-        );
-
-        res.json({ success: true, course: result.rows[0] });
-    } catch (err) {
-        console.error("Publish toggle error:", err);
         res.status(500).json({ error: err.message });
     }
 });
