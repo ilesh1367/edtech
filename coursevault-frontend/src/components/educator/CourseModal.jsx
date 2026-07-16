@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import Button from '../ui/Button';
 import { fetchAPI } from '../../services/api';
 
-export default function CourseModal({ isOpen, onClose, course = null, onSave }) {
+export default function CourseModal({ isOpen, onClose, course = null, onSave, parentCourseId = null }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState(0);
@@ -26,10 +26,21 @@ export default function CourseModal({ isOpen, onClose, course = null, onSave }) 
 
   if (!isOpen) return null;
 
+  // Dynamic header: editing an existing course, adding a sub-course under
+  // a parent row, or creating a brand new top-level course.
+  const modalHeading = course ? 'Edit Course' : parentCourseId ? 'Add Course' : 'Create Course';
+  const submitLabel = course ? 'Save Course' : parentCourseId ? 'Save Course' : 'Save Course';
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
     const data = { title, description, price: parseFloat(price), status };
+
+    // Only attach parent_course_id when creating a brand-new sub-course.
+    // No validation happens here or on the backend — it's simply stored.
+    if (!course && parentCourseId) {
+      data.parent_course_id = parentCourseId;
+    }
 
     try {
       if (course) {
@@ -50,7 +61,7 @@ export default function CourseModal({ isOpen, onClose, course = null, onSave }) 
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
       <div className="relative w-full max-w-lg bg-[#F4DFD8] border-[3px] border-black rounded-2xl flex flex-col shadow-[8px_8px_0px_0px_#111]">
         <div className="flex justify-between items-center p-4 border-b-[3px] border-black bg-white rounded-t-xl">
-          <h3 className="font-bold text-xl">{course ? 'Edit Course' : 'Create Course'}</h3>
+          <h3 className="font-bold text-xl">{modalHeading}</h3>
           <button onClick={onClose} className="w-8 h-8 border-[3px] border-black bg-[#F26B4D] rounded-full flex items-center justify-center font-bold hover:scale-110">
             <X size={16} strokeWidth={3} />
           </button>
@@ -81,7 +92,7 @@ export default function CourseModal({ isOpen, onClose, course = null, onSave }) 
           <div className="flex justify-end gap-3 mt-4">
             <button type="button" onClick={onClose} className="px-6 py-2 border-[3px] border-black rounded-xl font-bold hover:bg-gray-100 transition-colors">Cancel</button>
             <Button type="submit" variant="primary" className="py-2" disabled={isSubmitting}>
-              {isSubmitting ? 'Saving...' : 'Save Course'}
+              {isSubmitting ? 'Saving...' : submitLabel}
             </Button>
           </div>
         </form>
