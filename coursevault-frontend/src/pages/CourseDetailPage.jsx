@@ -99,7 +99,7 @@ export default function CourseDetailPage() {
   };
 
   const handleEnroll = async () => {
-    setIsRunning(true);
+    setIsEnrolling(true); // 🌟 FIX: Updated function reference from setIsRunning to setIsEnrolling
     try {
         const orderData = await fetchAPI('/payments/create-order', { 
             method: 'POST', 
@@ -248,7 +248,6 @@ export default function CourseDetailPage() {
             onEditModule={(mod) => { setEditingModule(mod); setIsModuleModalOpen(true); }}
             onDeleteModule={handleDeleteModule}
             
-            // 🌟 FIXED PROPS PASSED HERE:
             courseId={course.id}
             isEnrolled={isEnrolled}
             
