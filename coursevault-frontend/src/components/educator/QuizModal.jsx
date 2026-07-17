@@ -9,7 +9,7 @@ const emptyQuestion = () => ({
   correct_option_index: 0,
 });
 
-export default function QuizModal({ isOpen, onClose, moduleId, onSave }) {
+export default function QuizModal({ isOpen, onClose, moduleId, folderId, onSave }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [questions, setQuestions] = useState([emptyQuestion()]);
@@ -73,7 +73,13 @@ export default function QuizModal({ isOpen, onClose, moduleId, onSave }) {
     try {
       await fetchAPI('/quiz/create', {
         method: 'POST',
-        body: JSON.stringify({ moduleId, title, description, questions }),
+        body: JSON.stringify({ 
+          moduleId, 
+          title, 
+          description, 
+          questions, 
+          folder_id: folderId 
+        }),
       });
       onSave();
       onClose();
