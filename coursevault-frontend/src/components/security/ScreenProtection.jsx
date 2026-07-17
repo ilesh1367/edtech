@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 export default function ScreenProtection({ children }) {
+  // ⚠️ TEMPORARILY DISABLED FOR DEBUGGING
+  // Uncomment the block below to restore screen protection logic.
+
+  /*
   const [isBlackedOut, setIsBlackedOut] = useState(false);
   const pressedKeys = useRef(new Set());
   const timerRef = useRef(null);
@@ -35,7 +39,7 @@ export default function ScreenProtection({ children }) {
       pressedKeys.current.add(key);
 
       const isModifier = ['Meta',  'Control', 'Alt'].includes(key);
-//Shift+Cmd has to be added
+      //Shift+Cmd has to be added
       // PrintScreen key protection
       if (e.code === 'PrintScreen' || key === 'PrintScreen') {
         e.preventDefault();
@@ -100,12 +104,15 @@ export default function ScreenProtection({ children }) {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, []);
+  */
 
   return (
     <>
       {children}
       
+      {/* ⚠️ TEMPORARILY DISABLED FOR DEBUGGING */}
       {/* The Blackout Overlay */}
+      {/*
       {isBlackedOut && (
         <div className="fixed inset-0 bg-black z-[999999] flex flex-col items-center justify-center text-white font-mono gap-4 pointer-events-auto">
           <div className="text-6xl">🔐</div>
@@ -113,6 +120,7 @@ export default function ScreenProtection({ children }) {
           <div className="text-xl text-gray-400">Content Protection Active · Please Wait</div>
         </div>
       )}
+      */}
     </>
   );
 }

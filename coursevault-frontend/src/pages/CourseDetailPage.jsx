@@ -44,14 +44,15 @@ export default function CourseDetailPage() {
   const [isModuleModalOpen, setIsModuleModalOpen] = useState(false);
   const [isContentModalOpen, setIsContentModalOpen] = useState(false);
   const [isEnrollmentsModalOpen, setIsEnrollmentsModalOpen] = useState(false);
+  
   const [activeModuleId, setActiveModuleId] = useState(null);
+  const [activeFolderId, setActiveFolderId] = useState(null); // Tracks target tab
   const [editingModule, setEditingModule] = useState(null);
   const [contentModalTab, setContentModalTab] = useState('pdf');
 
   const loadCourseData = async () => {
     setIsLoading(true);
     try {
-      // 1. Fetch Course Data
       const data = await fetchAPI(`/courses/${id}`);
       setCourse(data.course);
       setModules(data.modules || []);
@@ -60,7 +61,6 @@ export default function CourseDetailPage() {
           setExpandedModules([data.modules[0].id]);
       }
 
-      // 2. Use the backend's absolute source of truth for enrollment
       if (user?.role === 'educator') {
           setIsEnrolled(true);
       } else {
@@ -243,14 +243,16 @@ export default function CourseDetailPage() {
             onToggle={() => setExpandedModules(prev => prev.includes(module.id) ? prev.filter(m => m !== module.id) : [...prev, module.id])}
             onContentClick={setActiveContent}
             isCreator={isCreator}
-            onAddContent={(mId) => { setActiveModuleId(mId); setContentModalTab('video'); setIsContentModalOpen(true); }}
-            onAddPDF={(mId) => { setActiveModuleId(mId); setContentModalTab('pdf'); setIsContentModalOpen(true); }}
+            
+            // 🌟 Capture both module ID and active folder ID from the accordion
+            onAddContent={(mId, fId) => { setActiveModuleId(mId); setActiveFolderId(fId); setContentModalTab('video'); setIsContentModalOpen(true); }}
+            onAddPDF={(mId, fId) => { setActiveModuleId(mId); setActiveFolderId(fId); setContentModalTab('pdf'); setIsContentModalOpen(true); }}
+            
             onEditModule={(mod) => { setEditingModule(mod); setIsModuleModalOpen(true); }}
             onDeleteModule={handleDeleteModule}
             
             courseId={course.id}
             isEnrolled={isEnrolled}
-            
             onRefreshCurriculum={loadCourseData} 
           />
         ))}
@@ -266,7 +268,16 @@ export default function CourseDetailPage() {
       {/* Educator Modals */}
       <CourseModal isOpen={isCourseModalOpen} onClose={() => setIsCourseModalOpen(false)} course={course} onSave={loadCourseData} />
       <ModuleModal isOpen={isModuleModalOpen} onClose={() => setIsModuleModalOpen(false)} courseId={course.id} module={editingModule} onSave={loadCourseData} />
-      <ContentModal isOpen={isContentModalOpen} onClose={() => setIsContentModalOpen(false)} moduleId={activeModuleId} onSave={loadCourseData} initialTab={contentModalTab} />
+      
+      {/* 🌟 Pass the folderId down into your ContentModal */}
+      <ContentModal 
+        isOpen={isContentModalOpen} 
+        onClose={() => setIsContentModalOpen(false)} 
+        moduleId={activeModuleId} 
+        folderId={activeFolderId} 
+        onSave={loadCourseData} 
+        initialTab={contentModalTab} 
+      />
       <EnrollmentsModal isOpen={isEnrollmentsModalOpen} onClose={() => setIsEnrollmentsModalOpen(false)} courseId={course.id} courseTitle={course.title} />
     </div>
   );

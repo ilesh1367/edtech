@@ -5,6 +5,8 @@ import authMiddleware from "../middleware/auth.js";
 const router = express.Router();
 
 // GET /api/courses
+// GET /api/courses
+// GET /api/courses
 router.get("/", async (req, res) => {
     try {
         const result = await pool.query(`
@@ -19,7 +21,6 @@ router.get("/", async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-
 // GET /api/my-courses
 router.get("/my-courses", authMiddleware, async (req, res) => {
     try {
@@ -124,7 +125,7 @@ router.get("/:id", async (req, res) => {
             if (module.content_ids && module.content_ids.length > 0) {
                 const contentResult = await pool.query(`
                     SELECT id, title, description, content_type, duration_seconds,
-                           thumbnail_url, preview, created_at
+                           thumbnail_url, preview, created_at,folder_id
                     FROM content_items
                     WHERE id = ANY($1::uuid[])
                     AND status = 'ready'
