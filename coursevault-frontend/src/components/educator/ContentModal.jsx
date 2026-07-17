@@ -1,216 +1,178 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { X, UploadCloud, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, UploadCloud } from 'lucide-react';
 import Button from '../ui/Button.jsx';
 import { fetchAPI } from '../../services/api.js';
 
-export default function ContentModal({ isOpen, onClose, moduleId, onSave, initialTab }) {
-  const [file, setFile] = useState(null);
+export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSave, initialTab = 'video' }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(false);
-  
+  const [priority, setPriority] = useState(0); // Priority state added
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('');
-  
-  const fileInputRef = useRef(null);
 
   useEffect(() => {
     if (isOpen) {
-      setFile(null);
       setTitle('');
       setDescription('');
+      setFile(null);
       setPreview(false);
-      setUploadProgress(0);
-      setStatusMessage('');
+      setPriority(0);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const uploadWithProgress = (url, formData) => {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      const token = localStorage.getItem('token'); 
-
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const percentage = Math.round((e.loaded * 100) / e.total);
-          setUploadProgress(percentage);
-          if (percentage === 100) {
-            setStatusMessage('Server is processing & transcoding video into multi-resolutions...');
-          } else {
-            setStatusMessage(`Uploading: ${percentage}%`);
-          }
-        }
-      });
-
-      xhr.addEventListener('load', () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            resolve(JSON.parse(xhr.responseText));
-          } catch (err) {
-            resolve({ success: true });
-          }
-        } else {
-          try {
-            const errorData = JSON.parse(xhr.responseText);
-            reject(new Error(errorData.error || 'Server upload handler failed.'));
-          } catch (e) {
-            reject(new Error('Server upload handler failed.'));
-          }
-        }
-      });
-
-      xhr.addEventListener('error', () => reject(new Error('Network upload error occurred.')));
-      
-      const baseAPI = (import.meta && import.meta.env && import.meta.env.VITE_API_URL) || 'http://localhost:3000/api';
-      xhr.open('POST', `${baseAPI}${url}`);
-      
-      if (token) {
-        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-      }
-      
-      xhr.send(formData);
-    });
-  };
+  const isVideo = initialTab === 'video';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!file) return alert("Please select a file to upload.");
-    
-    const MAX_MB = initialTab === 'video' ? 500 : 100;
-    if (file.size > MAX_MB * 1024 * 1024) {
-      return alert(`File too large. Maximum size is ${MAX_MB} MB for ${initialTab} uploads.`);
+    if (!file) {
+      alert("Please select a file to upload.");
+      return;
     }
 
     setIsUploading(true);
-    setUploadProgress(0);
-    setStatusMessage('Initiating upload streams...');
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('title', title);
-    formData.append('description', description || '');
-    formData.append('content_type', initialTab || 'pdf'); 
-    formData.append('preview', String(preview));
 
     try {
-      const endpoint = initialTab === 'video' ? '/content/upload-video' : '/content/upload';
-      
-      const uploadRes = await uploadWithProgress(endpoint, formData);
-      
-      if (uploadRes && uploadRes.content) {
-         await fetchAPI(`/modules/${moduleId}/content`, { 
-            method: 'POST', 
-            body: JSON.stringify({ content_id: uploadRes.content.id }) 
-         });
-         
-         if (typeof onSave === 'function') onSave(); 
-         if (typeof onClose === 'function') onClose();
-      } else {
-        throw new Error(uploadRes?.message || "Failed saving references.");
+      const formData = new FormData();
+      formData.append('title', title);
+      formData.append('description', description);
+      formData.append('file', file);
+      formData.append('preview', preview);
+      formData.append('priority', priority); // Append priority
+
+      // Target specific folder if provided
+      if (folderId) {
+        formData.append('folder_id', folderId);
       }
+
+      const endpoint = isVideo 
+        ? `/content/upload-video?moduleId=${moduleId}` 
+        : `/content/upload?moduleId=${moduleId}`;
+
+      // We use standard fetch here because we are sending FormData, not JSON.
+      // Make sure you append your Authorization header exactly how fetchAPI does it.
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Upload failed');
+      }
+
+      onSave();
+      onClose();
     } catch (err) {
-      alert(err.message || "Upload crashed. Check dev tools console.");
-      console.error("Upload Error Tracking:", err);
+      alert(err.message || 'Failed to upload content');
     } finally {
       setIsUploading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm font-sans">
-      <div className="relative w-full max-w-lg bg-white border-[3px] border-black rounded-2xl flex flex-col shadow-[8px_8px_0px_0px_#111]">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+      <div className="relative w-full max-w-lg bg-[#F4DFD8] border-[3px] border-black rounded-2xl flex flex-col shadow-[8px_8px_0px_0px_#111]">
         
-        <div className="flex justify-between items-center p-4 border-b-[3px] border-black bg-[#87CEFA]">
-          <h3 className="font-black text-xl uppercase tracking-tight">
-            Upload {initialTab === 'video' ? 'Video Lecture' : 'PDF Material'}
-          </h3>
-          <button 
-            type="button"
-            disabled={isUploading}
-            onClick={onClose} 
-            className="w-10 h-10 border-2 border-black bg-[#F26B4D] rounded-full flex items-center justify-center font-bold hover:scale-110 transition-transform shadow-[2px_2px_0px_0px_#000] disabled:opacity-50"
-          >
-            <X size={20} strokeWidth={3} />
+        <div className="flex justify-between items-center p-4 border-b-[3px] border-black bg-white rounded-t-xl">
+          <h3 className="font-bold text-xl uppercase">Add {isVideo ? 'Video' : 'PDF'}</h3>
+          <button onClick={onClose} className="w-8 h-8 border-[3px] border-black bg-[#F26B4D] rounded-full flex items-center justify-center font-bold hover:scale-110 transition-transform">
+            <X size={16} strokeWidth={3} />
           </button>
         </div>
         
-        <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-4">
-          
-          <div 
-            onClick={() => !isUploading && fileInputRef.current?.click()} 
-            className={`border-[3px] border-dashed border-black rounded-xl p-8 flex flex-col items-center bg-[#F4F4F4] transition-colors ${isUploading ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-[#F9E076]/10'}`}
-          >
-            <UploadCloud size={40} className="mb-2 text-black" />
-            <p className="font-bold text-sm text-center line-clamp-1">
-              {file ? file.name : `Click to Browse ${(initialTab || '').toUpperCase()}`}
-            </p>
+        <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-4 bg-white rounded-b-xl">
+          <div>
+            <label className="font-bold text-sm ml-1 mb-1 block">Title</label>
             <input 
-              type="file" 
-              ref={fileInputRef} 
-              className="hidden" 
-              disabled={isUploading}
-              accept={initialTab === 'pdf' ? '.pdf' : 'video/*'} 
-              onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)} 
-            />
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <input 
-              type="text"
               required 
-              disabled={isUploading}
-              placeholder="Content Title (e.g. Introduction to Calculus)" 
               value={title} 
               onChange={e => setTitle(e.target.value)} 
-              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-3 font-bold outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D] transition-all disabled:opacity-60" 
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
+              placeholder="e.g. Chapter 1 Introduction"
             />
-            
+          </div>
+
+          <div>
+            <label className="font-bold text-sm ml-1 mb-1 block">Description</label>
             <textarea 
-              placeholder="Short Description (Optional)" 
               value={description} 
-              disabled={isUploading}
               onChange={e => setDescription(e.target.value)} 
-              rows={2}
-              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-3 font-bold outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D] transition-all resize-none disabled:opacity-60" 
+              rows={2} 
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
             />
           </div>
 
-          <div 
-            onClick={() => !isUploading && setPreview(!preview)} 
-            className={`border-2 border-black rounded-xl p-4 flex items-center justify-between transition-all ${preview ? 'bg-[#A7E2D1]' : 'bg-gray-50'} ${isUploading ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
-          >
-            <div>
-              <span className="font-black text-sm block leading-none">FREE PREVIEW?</span>
-              <span className="text-[10px] font-bold text-gray-600">Students can watch this without buying.</span>
-            </div>
-            <div className={`w-8 h-8 border-2 border-black rounded-lg flex items-center justify-center transition-colors ${preview ? 'bg-black text-white' : 'bg-white'}`}>
-              {preview && <Check size={18} strokeWidth={4}/>}
-            </div>
+          {/* New Priority Field */}
+          <div>
+            <label className="font-bold text-sm ml-1 mb-1 block">Display Priority (Order)</label>
+            <input 
+              type="number" 
+              value={priority} 
+              onChange={(e) => setPriority(e.target.value)} 
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
+              placeholder="0 = first, 1 = second..."
+            />
+            <p className="text-xs text-gray-500 mt-1 ml-1 font-medium">Items with lower numbers appear first in the tab.</p>
           </div>
 
-          {isUploading && (
-            <div className="border-[3px] border-black bg-[#FFFEE0] rounded-xl p-4 flex flex-col items-center shadow-[4px_4px_0px_0px_#000]">
-              <div className="relative w-16 h-16 flex items-center justify-center bg-white border-2 border-black rounded-full">
-                <div className="animate-spin absolute inset-1 border-4 border-transparent border-t-[#F26B4D] border-r-black rounded-full"></div>
-                <span className="font-black text-xs text-black z-10">{uploadProgress}%</span>
+          <div>
+            <label className="font-bold text-sm ml-1 mb-1 block">File</label>
+            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-black border-dashed rounded-xl cursor-pointer bg-[#F4F4F4] hover:bg-gray-100 transition-colors">
+              <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                <UploadCloud className="w-8 h-8 mb-2 text-gray-500" />
+                <p className="mb-2 text-sm text-gray-500 font-bold">
+                  {file ? file.name : <span className="text-black">Click to select {isVideo ? 'Video' : 'PDF'}</span>}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {isVideo ? 'MP4, WebM (Max 500MB)' : 'PDF only (Max 50MB)'}
+                </p>
               </div>
-              <p className="text-center font-bold text-xs mt-3 text-black tracking-wide uppercase px-2">
-                {statusMessage}
-              </p>
-            </div>
-          )}
+              <input 
+                type="file" 
+                className="hidden" 
+                accept={isVideo ? "video/*" : "application/pdf"}
+                onChange={(e) => setFile(e.target.files[0])} 
+              />
+            </label>
+          </div>
 
-          <Button 
-            type="submit" 
-            variant="primary" 
-            disabled={isUploading}
-            className="py-4 border-[3px]"
-          >
-            {isUploading ? 'Upload Running...' : 'Confirm & Upload'}
-          </Button>
+          <div className="flex items-center gap-2 mt-2">
+            <input 
+              type="checkbox" 
+              id="preview"
+              checked={preview}
+              onChange={(e) => setPreview(e.target.checked)}
+              className="w-5 h-5 border-2 border-black rounded cursor-pointer accent-[#F26B4D]"
+            />
+            <label htmlFor="preview" className="font-bold text-sm cursor-pointer select-none">
+              Mark as Free Preview
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-3 mt-4">
+            <button 
+              type="button" 
+              onClick={onClose} 
+              className="px-6 py-2 border-[3px] border-black rounded-xl font-bold hover:bg-gray-100 transition-colors"
+            >
+              Cancel
+            </button>
+            <Button 
+              type="submit" 
+              variant="primary" 
+              disabled={isUploading}
+              className="py-2"
+            >
+              {isUploading ? 'Uploading...' : 'Upload'}
+            </Button>
+          </div>
         </form>
       </div>
     </div>

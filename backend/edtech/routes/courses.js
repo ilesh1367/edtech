@@ -96,6 +96,7 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
 });
 
 // GET /api/courses/:id
+// GET /api/courses/:id
 router.get("/:id", async (req, res) => {
     try {
         const { id } = req.params;
@@ -104,7 +105,7 @@ router.get("/:id", async (req, res) => {
             SELECT c.*, u.name as educator_name
             FROM courses c
             JOIN users u ON c.educator_id = u.id
-            WHERE c.id = $1 AND c.status = 'published' AND c.is_active = true
+            WHERE c.id = $1 AND c.deleted_at IS NULL
         `, [id]);
 
         if (courseResult.rows.length === 0) {
@@ -123,13 +124,15 @@ router.get("/:id", async (req, res) => {
         for (const module of modulesResult.rows) {
             let contents = [];
             if (module.content_ids && module.content_ids.length > 0) {
+                // 🌟 FIX: The priority query MUST be inside this loop!
                 const contentResult = await pool.query(`
                     SELECT id, title, description, content_type, duration_seconds,
-                           thumbnail_url, preview, created_at,folder_id
+                           thumbnail_url, preview, created_at, folder_id, priority
                     FROM content_items
                     WHERE id = ANY($1::uuid[])
                     AND status = 'ready'
-                `, [module.content_ids]);
+                    ORDER BY priority ASC, created_at ASC
+                `, [module.content_ids]); // Notice it uses `module` here because of the loop variable
                 contents = contentResult.rows;
             }
             modules.push({ ...module, contents });
@@ -141,8 +144,10 @@ router.get("/:id", async (req, res) => {
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith("Bearer ")) {
             try {
+                // If you haven't imported 'jwt' in courses.js, you might need to add: 
+                // import jwt from "jsonwebtoken"; at the top of the file!
                 const token = authHeader.split(" ")[1];
-                const decoded = jwt.verify(token, JWT_SECRET);
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
                 const enrollmentCheck = await pool.query(
                     `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
@@ -166,7 +171,6 @@ router.get("/:id", async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 // POST /api/courses
 router.post("/", authMiddleware, async (req, res) => {
     try {

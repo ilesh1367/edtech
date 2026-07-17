@@ -98,6 +98,20 @@ export default function CourseAccordion({
     }
   };
 
+  // --- Priority Actions ---
+  const handleUpdatePriority = async (contentId, newPriority) => {
+    try {
+      await fetchAPI(`/content/${contentId}/priority`, {
+        method: 'PUT',
+        body: JSON.stringify({ priority: newPriority })
+      });
+      // Refreshing will instantly snap the item to its new position!
+      if (onRefreshCurriculum) onRefreshCurriculum();
+    } catch (err) {
+      alert("Failed to update priority");
+    }
+  };
+
   // --- Bulk Move Actions ---
   const toggleContentSelection = (id) => {
     setSelectedContentIds(prev => 
@@ -146,10 +160,12 @@ export default function CourseAccordion({
     }
   };
 
-  // --- Get Active Content ---
-  const activeContents = contents.filter(c => 
-    activeTabId === null ? !c.folder_id : c.folder_id === activeTabId
-  );
+  // --- Get Active Content (Sorted by Priority: 1=High, 2=Medium, 3=Low) ---
+  const getPriorityLevel = (p) => (!p || p === 0 ? 2 : p); // Default unassigned to Medium (2)
+
+  const activeContents = contents
+    .filter(c => activeTabId === null ? !c.folder_id : c.folder_id === activeTabId)
+    .sort((a, b) => getPriorityLevel(a.priority) - getPriorityLevel(b.priority));
   
   const activeQuizzes = quizzes.filter(q => 
     activeTabId === null ? !q.folder_id : q.folder_id === activeTabId
@@ -308,6 +324,22 @@ export default function CourseAccordion({
                                         <h4 className="font-bold text-lg leading-none mb-1">{content.title}</h4>
                                         {!isVideo && <p className="text-sm font-medium text-gray-500">PDF • {formatSize(content.file_size_bytes)}</p>}
                                         {isVideo && <p className="text-sm font-medium text-gray-500">Video Lesson</p>}
+                                        
+                                        {/* 🌟 Inline Priority Dropdown Editor */}
+                                        {isCreator && (
+                                          <div className="flex items-center gap-2 mt-2">
+                                            <span className="text-[10px] font-black uppercase tracking-wider text-[#F26B4D]">Priority:</span>
+                                            <select
+                                              value={getPriorityLevel(content.priority)}
+                                              onChange={(e) => handleUpdatePriority(content.id, e.target.value)}
+                                              className="border-2 border-black rounded-md bg-[#F4F4F4] text-xs font-bold outline-none focus:bg-white focus:ring-2 focus:ring-[#F26B4D] transition-all px-2 py-0.5 cursor-pointer"
+                                            >
+                                              <option value={1}>High</option>
+                                              <option value={2}>Medium</option>
+                                              <option value={3}>Low</option>
+                                            </select>
+                                          </div>
+                                        )}
                                     </div>
                                 </div>
                                 
