@@ -6,18 +6,16 @@ const router = express.Router();
 
 // ============================================================
 // POST /api/quiz/create
-// Body: { moduleId, title, description, questions: [{ question_text, options: [...], correct_option_index }] }
+// Body: { moduleId, title, description, questions: [{ question_text, options: [...], correct_option_index }], folder_id }
 // Only the course creator (educator who owns the module's course) can create.
 // ============================================================
 router.post("/create", authMiddleware, async (req, res) => {
-    const { moduleId, title, description, questions } = req.body;
+    const { moduleId, title, description, questions, folder_id } = req.body;
 
     if (!moduleId || !title || !Array.isArray(questions) || questions.length === 0) {
         return res.status(400).json({ error: "moduleId, title and at least one question are required" });
     }
 
-    // authMiddleware resolves req.isCourseCreator when moduleId is present in body?
-    // It only reads req.params/req.query for moduleId, not req.body — so we verify manually here.
     const moduleCheck = await pool.query(`
         SELECT c.educator_id
         FROM modules m
@@ -50,9 +48,9 @@ router.post("/create", authMiddleware, async (req, res) => {
         await client.query("BEGIN");
 
         const quizResult = await client.query(`
-            INSERT INTO quizzes (module_id, title, description, created_by)
-            VALUES ($1, $2, $3, $4) RETURNING *
-        `, [moduleId, title, description || "", req.user.id]);
+            INSERT INTO quizzes (module_id, title, description, created_by, folder_id)
+            VALUES ($1, $2, $3, $4, $5) RETURNING *
+        `, [moduleId, title, description || "", req.user.id, folder_id || null]);
 
         const quiz = quizResult.rows[0];
 
@@ -82,7 +80,7 @@ router.get("/module/:moduleId", authMiddleware, async (req, res) => {
     try {
         const { moduleId } = req.params;
         const result = await pool.query(`
-            SELECT q.id, q.title, q.description, q.created_at,
+            SELECT q.id, q.title, q.description, q.created_at, q.folder_id,
                    COUNT(qq.id)::int AS question_count
             FROM quizzes q
             LEFT JOIN quiz_questions qq ON qq.quiz_id = q.id
@@ -136,7 +134,7 @@ router.get("/:id", authMiddleware, async (req, res) => {
 
         res.json({
             success: true,
-            quiz: { id: quiz.id, title: quiz.title, description: quiz.description, module_id: quiz.module_id },
+            quiz: { id: quiz.id, title: quiz.title, description: quiz.description, module_id: quiz.module_id, folder_id: quiz.folder_id },
             questions,
             isOwner
         });

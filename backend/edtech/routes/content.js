@@ -33,7 +33,7 @@ const activeJobs = new Map();
 // POST /api/content/upload
 router.post("/upload", authMiddleware, upload.single("file"), async (req, res) => {
     try {
-        const { title, description, content_type, preview } = req.body;
+        const { title, description, content_type, preview ,folder_id} = req.body;
         const file = req.file;
         
         if (req.user.role !== 'educator' && req.user.role !== 'admin') {
@@ -64,10 +64,9 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
         }));
 
         const result = await pool.query(`
-            INSERT INTO content_items (title, description, content_type, file_hash, file_name, file_size_bytes, mime_type, r2_key, status, preview, created_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ready', $9, $10) RETURNING *
-        `, [title, description, content_type, fileHash, file.originalname, file.size, mimeType, r2Key, preview === 'true' || preview === true, req.user.id]);
-
+    INSERT INTO content_items (title, description, content_type, file_hash, file_name, file_size_bytes, mime_type, r2_key, status, preview, created_by, folder_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ready', $9, $10, $11) RETURNING *
+`, [title, description, content_type, fileHash, file.originalname, file.size, mimeType, r2Key, preview === 'true' || preview === true, req.user.id, folder_id === 'null' ? null : folder_id]);
         res.status(201).json({ success: true, content: result.rows[0] });
     } catch (err) {
         console.error("Upload error:", err);
@@ -78,7 +77,7 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
 // POST /api/content/upload-video
 router.post("/upload-video", authMiddleware, upload.single("file"), async (req, res) => {
     try {
-        const { title, description, preview } = req.body;
+        const { title, description, preview,folder_id } = req.body;
         const file = req.file;
 
         if (req.user.role !== 'educator' && req.user.role !== 'admin') {
@@ -166,25 +165,15 @@ router.post("/upload-video", authMiddleware, upload.single("file"), async (req, 
         console.log(`🎬 Resolutions: ${resolutions.map(r => r.name).join(", ")}`);
 
         const result = await pool.query(`
-            INSERT INTO content_items (
-                title, description, content_type,
-                file_hash, file_name, file_size_bytes, mime_type,
-                duration_seconds, status, preview, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING id
-        `, [
-            title,
-            description || "",
-            "video",
-            fileHash,
-            file.originalname,
-            file.size,
-            file.mimetype,
-            videoInfo.duration,
-            "processing",
-            preview === 'true' || preview === true,
-            req.user.id
-        ]);
+    INSERT INTO content_items (
+        title, description, content_type,
+        file_hash, file_name, file_size_bytes, mime_type,
+        duration_seconds, status, preview, created_by, folder_id
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    RETURNING id
+`, [
+    title, description || "", "video", fileHash, file.originalname, file.size, file.mimetype, videoInfo.duration, "processing", preview === 'true' || preview === true, req.user.id, folder_id === 'null' ? null : folder_id
+]);
 
         const contentId = result.rows[0].id;
         console.log(`📝 DB entry created: ${contentId}`);
@@ -279,7 +268,20 @@ router.delete("/folder/:id", authMiddleware, async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-
+// PUT /api/content/:id/priority
+// Instantly updates the display order priority of a content item
+router.put("/:id/priority", authMiddleware, async (req, res) => {
+    try {
+        const { priority } = req.body;
+        await pool.query(
+            `UPDATE content_items SET priority = $1 WHERE id = $2`, 
+            [parseInt(priority) || 0, req.params.id]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 // GET /api/content/:id
 router.get("/:id", async (req, res) => {
