@@ -22,24 +22,16 @@ export default function CourseAccordion({
 }) {
   const contents = module.contents || [];
   
-  // UI State
-  const [activeTabId, setActiveTabId] = useState(null); // null = General Tab
+  const [activeTabId, setActiveTabId] = useState(null); 
   const [expandedVideoId, setExpandedVideoId] = useState(null);
-  
-  // Quiz State
   const [quizzes, setQuizzes] = useState([]);
   const [quizzesLoaded, setQuizzesLoaded] = useState(false);
   const [isQuizModalOpen, setIsQuizModalOpen] = useState(false);
   const [takingQuizId, setTakingQuizId] = useState(null);
-
-  // Folder (Tab) State
   const [folders, setFolders] = useState([]);
   const [foldersLoaded, setFoldersLoaded] = useState(false);
-  
-  // Bulk Move State
   const [selectedContentIds, setSelectedContentIds] = useState([]);
 
-  // --- Data Fetching ---
   const loadQuizzes = async () => {
     try {
       const data = await fetchAPI(`/quiz/module/${module.id}`);
@@ -69,7 +61,6 @@ export default function CourseAccordion({
     }
   }, [isOpen, quizzesLoaded, foldersLoaded]);
 
-  // --- Tab (Folder) Actions ---
   const handleCreateTab = async () => {
     const title = window.prompt("Enter new tab name (e.g., Chapter 1):");
     if (!title) return;
@@ -98,21 +89,18 @@ export default function CourseAccordion({
     }
   };
 
-  // --- Priority Actions ---
   const handleUpdatePriority = async (contentId, newPriority) => {
     try {
       await fetchAPI(`/content/${contentId}/priority`, {
         method: 'PUT',
         body: JSON.stringify({ priority: newPriority })
       });
-      // Refreshing will instantly snap the item to its new position!
       if (onRefreshCurriculum) onRefreshCurriculum();
     } catch (err) {
       alert("Failed to update priority");
     }
   };
 
-  // --- Bulk Move Actions ---
   const toggleContentSelection = (id) => {
     setSelectedContentIds(prev => 
       prev.includes(id) ? prev.filter(cId => cId !== id) : [...prev, id]
@@ -137,7 +125,6 @@ export default function CourseAccordion({
     }
   };
 
-  // --- Content Deletion ---
   const handleDeleteContent = async (e, contentId) => {
     e.stopPropagation(); 
     if (!window.confirm('Delete this content item?')) return;
@@ -160,12 +147,10 @@ export default function CourseAccordion({
     }
   };
 
-  // --- Get Active Content (Sorted by Priority: 1=High, 2=Medium, 3=Low) ---
-  const getPriorityLevel = (p) => (!p || p === 0 ? 2 : p); // Default unassigned to Medium (2)
-
+  // 🌟 Restored Numeric Sorting (Smallest number first)
   const activeContents = contents
     .filter(c => activeTabId === null ? !c.folder_id : c.folder_id === activeTabId)
-    .sort((a, b) => getPriorityLevel(a.priority) - getPriorityLevel(b.priority));
+    .sort((a, b) => (a.priority || 0) - (b.priority || 0));
   
   const activeQuizzes = quizzes.filter(q => 
     activeTabId === null ? !q.folder_id : q.folder_id === activeTabId
@@ -173,8 +158,6 @@ export default function CourseAccordion({
 
   return (
     <div className="bg-white border-2 border-black rounded-xl overflow-hidden shadow-[4px_4px_0px_0px_#111] mb-6">
-      
-      {/* Module Header */}
       <div
         className="p-6 flex justify-between items-center cursor-pointer hover:bg-gray-50 transition-colors"
         onClick={onToggle}
@@ -201,11 +184,8 @@ export default function CourseAccordion({
         </div>
       </div>
 
-      {/* Module Content Body */}
       {isOpen && (
         <div className="border-t-2 border-black bg-gray-50 flex flex-col animate-in fade-in slide-in-from-top-4 duration-300">
-          
-          {/* 1. Browser Tabs UI */}
           <div className="flex items-end gap-x-2 overflow-x-auto pt-4 px-4 bg-[#F4DFD8] border-b-2 border-black scrollbar-hide pb-0">
              <button 
                 onClick={() => setActiveTabId(null)} 
@@ -253,10 +233,7 @@ export default function CourseAccordion({
              )}
           </div>
 
-          {/* 2. Active Tab Workspace */}
           <div className="p-8 bg-white min-h-[300px] relative">
-            
-            {/* Tab Creation Action Bar */}
             {isCreator && (
                 <div className="flex flex-wrap gap-4 mb-8 pb-6 border-b-2 border-dashed border-gray-300">
                     <button onClick={() => onAddContent(module.id, activeTabId)} className="flex items-center gap-2 px-5 py-2.5 bg-[#87CEFA] border-2 border-black rounded-xl font-bold text-sm shadow-[2px_2px_0px_0px_#111] hover:scale-[1.02] transition-transform">
@@ -271,7 +248,6 @@ export default function CourseAccordion({
                 </div>
             )}
 
-            {/* Bulk Action Bar */}
             {selectedContentIds.length > 0 && isCreator && (
               <div className="bg-[#A7E2D1] border-2 border-black p-3 rounded-lg flex items-center justify-between shadow-[2px_2px_0px_0px_#111] mb-6 animate-in fade-in zoom-in duration-200">
                 <span className="font-bold">{selectedContentIds.length} items selected</span>
@@ -291,7 +267,6 @@ export default function CourseAccordion({
               </div>
             )}
 
-            {/* Empty State */}
             {activeContents.length === 0 && activeQuizzes.length === 0 ? (
                 <div className="text-center border-2 border-dashed border-gray-300 rounded-xl py-12">
                     <p className="text-gray-500 font-bold mb-2">This tab is empty.</p>
@@ -299,8 +274,6 @@ export default function CourseAccordion({
                 </div>
             ) : (
                 <div className="flex flex-col gap-4">
-                    
-                    {/* Render Files (Videos/PDFs) */}
                     {activeContents.map((content) => {
                         const isVideo = content.content_type === 'video';
                         const isSelected = selectedContentIds.includes(content.id);
@@ -325,19 +298,17 @@ export default function CourseAccordion({
                                         {!isVideo && <p className="text-sm font-medium text-gray-500">PDF • {formatSize(content.file_size_bytes)}</p>}
                                         {isVideo && <p className="text-sm font-medium text-gray-500">Video Lesson</p>}
                                         
-                                        {/* 🌟 Inline Priority Dropdown Editor */}
+                                        {/* 🌟 Restored Inline Number Input */}
                                         {isCreator && (
                                           <div className="flex items-center gap-2 mt-2">
                                             <span className="text-[10px] font-black uppercase tracking-wider text-[#F26B4D]">Priority:</span>
-                                            <select
-                                              value={getPriorityLevel(content.priority)}
-                                              onChange={(e) => handleUpdatePriority(content.id, e.target.value)}
-                                              className="border-2 border-black rounded-md bg-[#F4F4F4] text-xs font-bold outline-none focus:bg-white focus:ring-2 focus:ring-[#F26B4D] transition-all px-2 py-0.5 cursor-pointer"
-                                            >
-                                              <option value={1}>High</option>
-                                              <option value={2}>Medium</option>
-                                              <option value={3}>Low</option>
-                                            </select>
+                                            <input 
+                                              type="number" 
+                                              defaultValue={content.priority || 0}
+                                              onBlur={(e) => handleUpdatePriority(content.id, e.target.value)}
+                                              className="w-16 border-2 border-black rounded bg-[#F4F4F4] text-center text-xs font-bold outline-none focus:bg-white focus:ring-2 focus:ring-[#F26B4D] transition-all py-0.5"
+                                              title="Lower numbers appear first. Click away to save."
+                                            />
                                           </div>
                                         )}
                                     </div>
@@ -382,7 +353,6 @@ export default function CourseAccordion({
                         );
                     })}
 
-                    {/* Render Quizzes */}
                     {activeQuizzes.map((quiz) => (
                         <div key={quiz.id} className="border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_0px_#111] bg-white">
                             <div className="flex justify-between items-center">

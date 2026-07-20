@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { X, UploadCloud } from 'lucide-react';
 import Button from '../ui/Button.jsx';
-import { fetchAPI } from '../../services/api.js';
 
 export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSave, initialTab = 'video' }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(false);
-  const [priority, setPriority] = useState(0); // Priority state added
+  const [priority, setPriority] = useState(0); // 🌟 Reset to 0
   const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
@@ -17,7 +16,7 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       setDescription('');
       setFile(null);
       setPreview(false);
-      setPriority(0);
+      setPriority(0); // Reset to 0
     }
   }, [isOpen]);
 
@@ -40,9 +39,9 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       formData.append('description', description);
       formData.append('file', file);
       formData.append('preview', preview);
-      formData.append('priority', priority); // Append priority
+      formData.append('priority', priority); 
+      formData.append('content_type', isVideo ? 'video' : 'pdf'); // 🌟 Kept the fix!
 
-      // Target specific folder if provided
       if (folderId) {
         formData.append('folder_id', folderId);
       }
@@ -51,8 +50,6 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
         ? `/content/upload-video?moduleId=${moduleId}` 
         : `/content/upload?moduleId=${moduleId}`;
 
-      // We use standard fetch here because we are sending FormData, not JSON.
-      // Make sure you append your Authorization header exactly how fetchAPI does it.
       const token = localStorage.getItem('token');
       const response = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
         method: 'POST',
@@ -109,14 +106,14 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
             />
           </div>
 
-          {/* New Priority Field */}
+          {/* 🌟 Restored Number Priority Field */}
           <div>
             <label className="font-bold text-sm ml-1 mb-1 block">Display Priority (Order)</label>
             <input 
               type="number" 
               value={priority} 
               onChange={(e) => setPriority(e.target.value)} 
-              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-bold focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
               placeholder="0 = first, 1 = second..."
             />
             <p className="text-xs text-gray-500 mt-1 ml-1 font-medium">Items with lower numbers appear first in the tab.</p>

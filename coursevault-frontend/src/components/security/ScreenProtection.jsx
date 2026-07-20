@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 export default function ScreenProtection({ children }) {
-  // ⚠️ TEMPORARILY DISABLED FOR DEBUGGING
-  // Uncomment the block below to restore screen protection logic.
-
-  /*
+return <>{children}</>;
   const [isBlackedOut, setIsBlackedOut] = useState(false);
   const pressedKeys = useRef(new Set());
   const timerRef = useRef(null);
@@ -15,7 +12,7 @@ export default function ScreenProtection({ children }) {
 
     const showBlackout = (reason) => {
       if (active) return;
-      
+
       active = true;
       setIsBlackedOut(true);
       console.log(`⚫ BLACKOUT TRIGGERED — Reason: ${reason}`);
@@ -35,11 +32,15 @@ export default function ScreenProtection({ children }) {
     const handleKeyDown = (e) => {
       const key = e.key;
       if (pressedKeys.current.has(key)) return;
-
       pressedKeys.current.add(key);
 
-      const isModifier = ['Meta',  'Control', 'Alt'].includes(key);
-      //Shift+Cmd has to be added
+      // Specific Screenshot Shortcut Protection (Mac: Cmd+Shift+3/4/5, Windows: Win+Shift+S)
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
+        e.preventDefault();
+        if (!active) showBlackout('Screenshot Shortcut (Cmd/Ctrl + Shift)');
+        return;
+      }
+
       // PrintScreen key protection
       if (e.code === 'PrintScreen' || key === 'PrintScreen') {
         e.preventDefault();
@@ -47,7 +48,9 @@ export default function ScreenProtection({ children }) {
         return;
       }
 
-      // Single modifier protection (catches Cmd+Shift+4 on Mac, Ctrl+PrintScreen on Windows)
+      const isModifier = ['Meta', 'Control', 'Alt'].includes(key);
+      
+      // Single modifier protection (catches bare Meta/Windows key)
       if (isModifier && !active) {
         e.preventDefault();
         showBlackout(`Modifier key: ${key}`);
@@ -104,15 +107,12 @@ export default function ScreenProtection({ children }) {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, []);
-  */
 
   return (
     <>
       {children}
-      
-      {/* ⚠️ TEMPORARILY DISABLED FOR DEBUGGING */}
-      {/* The Blackout Overlay */}
-      {/*
+
+      {/* The Blackout Overlay (Restored and Active) */}
       {isBlackedOut && (
         <div className="fixed inset-0 bg-black z-[999999] flex flex-col items-center justify-center text-white font-mono gap-4 pointer-events-auto">
           <div className="text-6xl">🔐</div>
@@ -120,7 +120,6 @@ export default function ScreenProtection({ children }) {
           <div className="text-xl text-gray-400">Content Protection Active · Please Wait</div>
         </div>
       )}
-      */}
     </>
   );
 }
