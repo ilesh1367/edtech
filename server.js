@@ -148,11 +148,19 @@ async function setupDatabase() {
 setupDatabase();
 
 // ============================================
-// Middleware
+// Global Middleware Configuration
 // ============================================
-app.use(express.json());
-app.use(cors());
-app.use(express.urlencoded({ extended: true }));
+// 🚀 FIX: Set parsing limits high enough to comfortably read large video metadata payloads
+app.use(express.json({ limit: "500mb" }));
+app.use(express.urlencoded({ limit: "500mb", extended: true }));
+
+// 🚀 FIX: Harden CORS policies so modern browsers don't choke on streaming media requests
+app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Range"],
+    exposedHeaders: ["Content-Range", "X-Content-Duration", "Content-Length"]
+}));
 
 // ============================================
 // Routes
@@ -165,6 +173,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/enrollments", enrollmentRoutes);
 app.use("/api/video", videoRoutes);
 app.use("/api/analytics", analyticsRoutes); 
+
 // ============================================
 // HLS Proxy Route
 // ============================================
@@ -174,7 +183,6 @@ app.get("/api/hls/serve", async (req, res) => {
         if (!videoId || !hlsPathRaw) return res.status(400).send("Missing videoId or path");
 
         const hlsPath = hlsPathRaw;
-
         if (hlsPath.includes("..")) return res.status(400).send("Invalid path");
 
         const result = await pool.query(
@@ -207,6 +215,7 @@ app.get("/api/hls/serve", async (req, res) => {
         const isM3u8 = hlsPath.endsWith(".m3u8");
         const isTs = hlsPath.endsWith(".ts");
 
+        // 🚀 FIX: Apply comprehensive headers required by HTML5 engines (Hls.js / Video.js)
         res.setHeader("Content-Type",
             isM3u8 ? "application/vnd.apple.mpegurl"
                 : isTs ? "video/mp2t"
@@ -214,6 +223,7 @@ app.get("/api/hls/serve", async (req, res) => {
         );
         res.setHeader("Cache-Control", "no-cache, no-store, private");
         res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Headers", "*");
 
         if (isTs) {
             r2Response.Body.pipe(res);

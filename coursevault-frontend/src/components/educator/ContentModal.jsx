@@ -7,7 +7,7 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
   const [description, setDescription] = useState('');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(false);
-  const [priority, setPriority] = useState(0); // 🌟 Reset to 0
+  const [priority, setPriority] = useState(0); 
   const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
@@ -16,7 +16,7 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       setDescription('');
       setFile(null);
       setPreview(false);
-      setPriority(0); // Reset to 0
+      setPriority(0);
     }
   }, [isOpen]);
 
@@ -38,9 +38,15 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       formData.append('title', title);
       formData.append('description', description);
       formData.append('file', file);
-      formData.append('preview', preview);
-      formData.append('priority', priority); 
-      formData.append('content_type', isVideo ? 'video' : 'pdf'); // 🌟 Kept the fix!
+      
+      // 🚀 FIX 1: Send stringified booleans to bypass multipart parsing traps
+      formData.append('preview', preview ? 'true' : 'false');
+      
+      // 🚀 FIX 2: Explicitly clamp the user entry into a safe base-10 integer
+      const parsedPriority = parseInt(priority, 10);
+      formData.append('priority', isNaN(parsedPriority) ? 0 : parsedPriority); 
+      
+      formData.append('content_type', isVideo ? 'video' : 'pdf');
 
       if (folderId) {
         formData.append('folder_id', folderId);
@@ -51,7 +57,11 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
         : `/content/upload?moduleId=${moduleId}`;
 
       const token = localStorage.getItem('token');
-      const response = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
+      
+      // 🚀 FIX 3: Hard-fallback path in case Vite compilation variables flicker
+      const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+      
+      const response = await fetch(`${apiBaseUrl}${endpoint}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -60,8 +70,18 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Upload failed');
+        // 🚀 FIX 4: Detect content headers to filter out raw HTML 404/500 engine errors safely
+        let errorMessage = 'Upload failed';
+        const contentType = response.headers.get("content-type");
+        
+        if (contentType && contentType.includes("application/json")) {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } else {
+          errorMessage = `Server Error (${response.status}): Target endpoint not found or unreachable.`;
+        }
+        
+        throw new Error(errorMessage);
       }
 
       onSave();
@@ -106,12 +126,12 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
             />
           </div>
 
-          {/* 🌟 Restored Number Priority Field */}
           <div>
             <label className="font-bold text-sm ml-1 mb-1 block">Display Priority (Order)</label>
             <input 
               type="number" 
               value={priority} 
+              min="0"
               onChange={(e) => setPriority(e.target.value)} 
               className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-bold focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
               placeholder="0 = first, 1 = second..."

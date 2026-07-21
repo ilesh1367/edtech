@@ -1,36 +1,75 @@
 // Detect the backend base URL dynamically
-// If the app is served via Nginx (reverse proxy), it will use the current host.
-// Otherwise, it falls back to your local development environment.
 const getBaseUrl = () => {
-  // If we are in development, use your local proxy or Vite env
   if (window.location.hostname === 'localhost') {
     return import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
   }
-  // In production, the backend is likely on the same host (VPS IP/Domain)
-  // We point the API to the same server, but on port 3000
   return window.location.origin + '/api';
 };
 
 const BASE_URL = getBaseUrl();
 
+// 🚀 FIXED: Appends moduleId directly to FormData body instead of URL Query Params
+export const uploadVideoWithProgress = (moduleId, file, onProgress) => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const token = localStorage.getItem('token');
+    const formData = new FormData();
+    
+    // Append fields directly to the form body payload
+    formData.append('video', file);
+    formData.append('moduleId', moduleId); 
+
+    // Track real-time uploading logs
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        const percentComplete = Math.round((event.loaded / event.total) * 100);
+        if (onProgress) onProgress(percentComplete);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (_) {
+          resolve(xhr.responseText);
+        }
+      } else {
+        try {
+          const errData = JSON.parse(xhr.responseText);
+          reject(new Error(errData.error || `Upload failed with status: ${xhr.status}`));
+        } catch (_) {
+          reject(new Error(`Upload failed with status: ${xhr.status}`));
+        }
+      }
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Network upload error occurred.')));
+    
+    // 🚀 Cleaned endpoint path without trailing query parameter pollution
+    xhr.open('POST', `${BASE_URL}/content/upload-video`);
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+    xhr.send(formData);
+  });
+};
+
+// Existing fetchAPI Utility
 export const fetchAPI = async (endpoint, options = {}) => {
   const token = localStorage.getItem('token');
-
-  // Ensure headers exists
   const headers = { ...options.headers };
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  // Only set Content-Type if we aren't sending FormData (which needs custom boundaries)
   if (options.body && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
   }
 
   try {
     const response = await fetch(`${BASE_URL}${endpoint}`, { ...options, headers });
-
     const contentType = response.headers.get("content-type");
     const data = contentType?.includes("application/json")
       ? await response.json()
