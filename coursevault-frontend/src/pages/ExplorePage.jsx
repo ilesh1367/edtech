@@ -8,7 +8,7 @@ export default function ExplorePage() {
   const navigate = useNavigate();
   const [courses, setCourses] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  
+
   // Track which parent course (e.g. "Class 12") is currently clicked
   const [selectedParentId, setSelectedParentId] = useState(null);
 
@@ -25,28 +25,37 @@ export default function ExplorePage() {
   }, []);
 
   // Extracts a numeric class value from a title like "9th Class", "10th Class"
-  // to properly sort the parent folders.
+  // Used only as a tie-breaker when two courses share the same display_order.
   const getClassNumber = (title = '') => {
     const match = title.match(/(\d+)\s*(?:st|nd|rd|th)?\s*Class/i);
     return match ? parseInt(match[1], 10) : null;
   };
 
-  // 1. Get ONLY the main categories (no parent), and sort them numerically
+  // Same ordering rule as the educator dashboard: display_order (the
+  // mentor's manually arranged priority) decides the position first, so
+  // any reordering the mentor does is reflected here automatically.
+  const compareCourses = (a, b) => {
+    const orderA = a.display_order ?? 0;
+    const orderB = b.display_order ?? 0;
+    if (orderA !== orderB) return orderA - orderB;
+
+    const numA = getClassNumber(a.title);
+    const numB = getClassNumber(b.title);
+    if (numA !== null && numB !== null) return numA - numB;
+    if (numA !== null) return -1;
+    if (numB !== null) return 1;
+    return (a.title || '').localeCompare(b.title || '');
+  };
+
+  // 1. Get ONLY the main categories (no parent), sorted by mentor priority
   const topLevelCourses = courses
     .filter(c => !c.parent_course_id)
-    .sort((a, b) => {
-      const numA = getClassNumber(a.title);
-      const numB = getClassNumber(b.title);
+    .sort(compareCourses);
 
-      if (numA !== null && numB !== null) return numA - numB;
-      if (numA !== null) return -1;
-      if (numB !== null) return 1;
-      return (a.title || '').localeCompare(b.title || '');
-    });
-
-  // 2. Get ONLY the subjects for the currently selected category
-  const childCourses = selectedParentId 
-    ? courses.filter(c => c.parent_course_id === selectedParentId)
+  // 2. Get ONLY the subjects for the currently selected category, also
+  //    sorted by the mentor's priority for that class.
+  const childCourses = selectedParentId
+    ? courses.filter(c => c.parent_course_id === selectedParentId).sort(compareCourses)
     : [];
 
   // Find the selected parent object to display its title dynamically
@@ -61,7 +70,7 @@ export default function ExplorePage() {
         <div className="absolute top-10 right-20 text-black animate-float-icon" style={{ animationDelay: '1s' }}>
             <Microscope size={40} strokeWidth={1.5} />
         </div>
-        
+
         <h1 className="text-5xl md:text-7xl font-bold leading-[1.1] tracking-tight relative z-10 max-w-4xl">
           Educational content <br /> for curious minds.
         </h1>
@@ -82,13 +91,13 @@ export default function ExplorePage() {
                 <h2 className="text-4xl font-bold tracking-tight mb-8">All Classes</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16 items-start animate-in fade-in zoom-in-95 duration-300">
                   {topLevelCourses.map((course, index) => (
-                    <CourseCard 
-                      key={course.id} 
-                      course={course} 
-                      index={index} 
+                    <CourseCard
+                      key={course.id}
+                      course={course}
+                      index={index}
                       isMyLearning={false}
                       // Set state to drill down into the folder instead of navigating
-                      onClick={() => setSelectedParentId(course.id)} 
+                      onClick={() => setSelectedParentId(course.id)}
                     />
                   ))}
                 </div>
@@ -98,10 +107,10 @@ export default function ExplorePage() {
                  VIEW 2: SHOW SUBJECTS INSIDE CATEGORY
                  ========================================= */
               <div className="animate-in slide-in-from-right-8 fade-in duration-300">
-                
+
                 {/* Navigation Header */}
                 <div className="flex flex-col md:flex-row md:items-center gap-4 mb-8">
-                  <button 
+                  <button
                     onClick={() => setSelectedParentId(null)}
                     className="flex items-center gap-2 bg-white border-2 border-black rounded-lg px-4 py-2 font-bold hover:bg-[#F9E076] transition-colors shadow-[2px_2px_0px_0px_#111] self-start"
                   >

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, GraduationCap, ChevronRight, Layers, Trash2 } from 'lucide-react';
+import { Plus, GraduationCap, ChevronRight, Layers, Trash2, Pencil, ChevronUp, ChevronDown } from 'lucide-react';
 import CourseCard from '../components/course/CourseCard.jsx';
 import Button from '../components/ui/Button.jsx';
 import CourseModal from '../components/educator/CourseModal.jsx';
@@ -14,13 +14,25 @@ export default function EducatorDashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isCourseModalOpen, setIsCourseModalOpen] = useState(false);
 
+  // When null -> the modal creates a brand-new top-level course (same as
+  // the "Create New Course" button). When set to a course id -> the modal
+  // creates a course linked to that course as its parent (row's "+ Add
+  // Course" button).
   const [modalParentId, setModalParentId] = useState(null);
+
+  // When set to a course object -> the modal edits that course (title,
+  // description, price, status) instead of creating a new one.
+  const [editingCourse, setEditingCourse] = useState(null);
+
+  // Tracks which single top-level course row is currently expanded.
+  // null = nothing expanded.
   const [selectedCourseId, setSelectedCourseId] = useState(null);
 
   const loadMyCourses = () => {
     setIsLoading(true);
     fetchAPI('/courses')
       .then(data => {
+        // Show courses created by this user
         const myCourses = (data.courses || []).filter(c => c.educator_id === user?.id || c.isCreator);
         setCourses(myCourses);
         setIsLoading(false);
@@ -47,55 +59,129 @@ export default function EducatorDashboardPage() {
     }
   };
 
+  // Only courses with no parent are shown as their own row on the
+  // dashboard. Sub-courses (created via a row's "+ Add Course") stay
+  // nested under their parent and are rendered only when that parent
+  // is expanded.
   const topLevelCourses = courses.filter(c => !c.parent_course_id);
 
+  // Dynamically looks up every course linked to a given parent id.
+  // No hardcoded names/ids -- purely relationship-driven.
   const getChildCourses = (parentId) =>
     courses.filter(c => c.parent_course_id === parentId);
 
+  // If the currently selected top-level course disappears (deleted /
+  // list refreshed and no longer contains it), clear the selection so we
+  // never render a stale/ghost card.
   useEffect(() => {
     if (selectedCourseId && !topLevelCourses.some(c => c.id === selectedCourseId)) {
       setSelectedCourseId(null);
     }
-  }, [courses, selectedCourseId]); 
+  }, [courses, selectedCourseId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const publishedCount = topLevelCourses.filter(c => c.status === 'published').length;
 
+  // Toggle behaviour: clicking "View" on the already-open course closes it,
+  // clicking a different course's "View" switches to that one instead.
   const handleToggleView = (courseId) => {
     setSelectedCourseId(prev => (prev === courseId ? null : courseId));
   };
 
   const openCreateModal = () => {
     setModalParentId(null);
+    setEditingCourse(null);
     setIsCourseModalOpen(true);
   };
 
   const openAddModal = (parentId) => {
     setModalParentId(parentId);
+    setEditingCourse(null);
+    setIsCourseModalOpen(true);
+  };
+
+  const openEditModal = (course) => {
+    setEditingCourse(course);
+    setModalParentId(null);
     setIsCourseModalOpen(true);
   };
 
   const closeModal = () => {
     setIsCourseModalOpen(false);
     setModalParentId(null);
+    setEditingCourse(null);
   };
 
-  const selectedCourse = topLevelCourses.find(c => c.id === selectedCourseId) || null;
-  const selectedChildCourses = selectedCourse ? getChildCourses(selectedCourse.id) : [];
-
+  // Extracts a numeric class value from a title like "9th Class",
+  // "10th Class", "12th Class Physics" etc. Used only as a tie-breaker
+  // when two courses share the same display_order (e.g. brand new
+  // courses that haven't been manually arranged yet).
   const getClassNumber = (title = '') => {
     const match = title.match(/(\d+)\s*(?:st|nd|rd|th)?\s*Class/i);
     return match ? parseInt(match[1], 10) : null;
   };
 
-  const sortedCourses = [...topLevelCourses].sort((a, b) => {
+  // Primary sort key is display_order (the mentor's manual priority set
+  // via the up/down arrows). Falls back to the class-number pattern, then
+  // alphabetical, only when display_order is tied -- e.g. right after a
+  // fresh course is created and hasn't been arranged yet.
+  const compareCourses = (a, b) => {
+    const orderA = a.display_order ?? 0;
+    const orderB = b.display_order ?? 0;
+    if (orderA !== orderB) return orderA - orderB;
+
     const numA = getClassNumber(a.title);
     const numB = getClassNumber(b.title);
-
     if (numA !== null && numB !== null) return numA - numB;
     if (numA !== null) return -1;
     if (numB !== null) return 1;
     return (a.title || '').localeCompare(b.title || '');
-  });
+  };
+
+  const sortedCourses = [...topLevelCourses].sort(compareCourses);
+
+  const selectedCourse = topLevelCourses.find(c => c.id === selectedCourseId) || null;
+  const selectedChildCourses = selectedCourse
+    ? getChildCourses(selectedCourse.id).sort(compareCourses)
+    : [];
+
+  // Sends the new order for one sibling group (either the top-level rows,
+  // or the child/subject courses under a single parent) to the backend,
+  // then reloads so the UI reflects the confirmed, saved state.
+  const persistOrder = (orderedIds) => {
+    fetchAPI('/courses/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds })
+    })
+      .then(() => loadMyCourses())
+      .catch(err => {
+        console.error('Failed to save order', err);
+        alert('Could not save the new order. Please try again.');
+        loadMyCourses();
+      });
+  };
+
+  // Moves a top-level course up or down among the other top-level rows.
+  const moveTopLevelCourse = (courseId, direction) => {
+    const list = [...sortedCourses];
+    const idx = list.findIndex(c => c.id === courseId);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= list.length) return;
+
+    [list[idx], list[swapIdx]] = [list[swapIdx], list[idx]];
+    persistOrder(list.map(c => c.id));
+  };
+
+  // Moves a child/subject course up or down only among its siblings under
+  // the same parent -- never mixed with any other course's children.
+  const moveChildCourse = (childId, direction, parentId) => {
+    const list = [...getChildCourses(parentId)].sort(compareCourses);
+    const idx = list.findIndex(c => c.id === childId);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= list.length) return;
+
+    [list[idx], list[swapIdx]] = [list[swapIdx], list[idx]];
+    persistOrder(list.map(c => c.id));
+  };
 
   return (
     <div className="pb-20 animate-in fade-in slide-in-from-bottom-5 duration-500">
@@ -111,6 +197,7 @@ export default function EducatorDashboardPage() {
         </Button>
       </div>
 
+      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
         <div className="bg-[#87CEFA] border-[3px] border-black rounded-2xl p-6 shadow-[8px_8px_0px_0px_#111]">
           <div className="text-5xl font-black mb-1">{topLevelCourses.length}</div>
@@ -133,30 +220,61 @@ export default function EducatorDashboardPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          {sortedCourses.map((course) => {
+          {sortedCourses.map((course, courseIndex) => {
             const isSelected = course.id === selectedCourseId;
             const childCount = getChildCourses(course.id).length;
-            
+
             return (
               <div key={course.id} className="w-full">
+                {/* Row: arrange arrows + name + Edit + Add Course + View + Delete */}
                 <div
-                  className={`flex items-center justify-between bg-white border-[3px] border-black rounded-2xl px-6 py-4 shadow-[6px_6px_0px_0px_#111] ${isSelected ? 'ring-2 ring-[#F26B4D]' : ''}`}
+                  className={`flex items-center justify-between bg-white border-[3px] border-black rounded-2xl px-6 py-4 shadow-[6px_6px_0px_0px_#111] transition-all
+                    ${isSelected ? 'ring-2 ring-[#F26B4D]' : ''}`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="font-black text-lg truncate">{course.title}</span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-black text-white px-2 py-1 rounded-full shrink-0">
-                      {course.status || 'draft'}
-                    </span>
-                    {childCount > 0 && (
-                      <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-[#A7E2D1] border border-black px-2 py-1 rounded-full shrink-0">
-                        <Layers size={10} /> {childCount} added
+                  <div className="flex items-center gap-4 min-w-0">
+                    {/* Arrange (priority) controls */}
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        onClick={() => moveTopLevelCourse(course.id, 'up')}
+                        disabled={courseIndex === 0}
+                        title="Move up"
+                        className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronUp size={14} strokeWidth={3} />
+                      </button>
+                      <button
+                        onClick={() => moveTopLevelCourse(course.id, 'down')}
+                        disabled={courseIndex === sortedCourses.length - 1}
+                        title="Move down"
+                        className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronDown size={14} strokeWidth={3} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="font-black text-lg truncate">{course.title}</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider bg-black text-white px-2 py-1 rounded-full shrink-0">
+                        {course.status || 'draft'}
                       </span>
-                    )}
+                      {childCount > 0 && (
+                        <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-[#A7E2D1] border border-black px-2 py-1 rounded-full shrink-0">
+                          <Layers size={10} /> {childCount} added
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4 shrink-0">
+
+                  <div className="flex items-center gap-3 shrink-0">
+                    <button
+                      onClick={() => openEditModal(course)}
+                      className="flex items-center gap-1 font-bold text-sm border-2 border-black rounded-full px-3 py-1.5 bg-[#87CEFA] hover:bg-[#6cc0f5] transition-colors shadow-[2px_2px_0px_0px_#111]"
+                    >
+                      <Pencil size={14} strokeWidth={3} /> Edit
+                    </button>
                     <button
                       onClick={() => openAddModal(course.id)}
-                      className="flex items-center gap-1 font-bold text-sm border-2 border-black rounded-full px-3 py-1.5 bg-[#F9E076] hover:bg-[#f5d840] transition-colors"
+                      className="flex items-center gap-1 font-bold text-sm border-2 border-black rounded-full px-3 py-1.5 bg-[#F9E076] hover:bg-[#f5d84a] transition-colors shadow-[2px_2px_0px_0px_#111]"
                     >
                       <Plus size={16} strokeWidth={3} /> Add Course
                     </button>
@@ -170,8 +288,8 @@ export default function EducatorDashboardPage() {
                         className={`transition-transform ${isSelected ? 'rotate-90' : ''}`}
                       />
                     </button>
-                    
-                    {/* 🌟 New Delete Button */}
+
+                    {/* Delete Button */}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -182,23 +300,51 @@ export default function EducatorDashboardPage() {
                     >
                       <Trash2 size={16} strokeWidth={3} />
                     </button>
-
                   </div>
                 </div>
 
+                {/* Only render the child courses (subjects) belonging to this parent */}
                 {isSelected && selectedCourse && (
                   <div className="mt-6 mb-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16 items-start">
                     {selectedChildCourses.length === 0 ? (
                       <p className="text-gray-500 font-bold italic col-span-full pt-4">No subjects added to this class yet.</p>
                     ) : (
                       selectedChildCourses.map((child, i) => (
-                        <CourseCard
-                          key={child.id}
-                          course={child}
-                          index={i}
-                          isMyLearning={false}
-                          onClick={(id) => navigate(`/course/${id}`)}
-                        />
+                        <div key={child.id} className="flex flex-col gap-3">
+                          {/* Arrange + Edit controls for this subject */}
+                          <div className="flex items-center justify-between px-1">
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => moveChildCourse(child.id, 'up', selectedCourse.id)}
+                                disabled={i === 0}
+                                title="Move up"
+                                className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                              >
+                                <ChevronUp size={14} strokeWidth={3} />
+                              </button>
+                              <button
+                                onClick={() => moveChildCourse(child.id, 'down', selectedCourse.id)}
+                                disabled={i === selectedChildCourses.length - 1}
+                                title="Move down"
+                                className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                              >
+                                <ChevronDown size={14} strokeWidth={3} />
+                              </button>
+                            </div>
+                            <button
+                              onClick={() => openEditModal(child)}
+                              className="flex items-center gap-1 font-bold text-xs border-2 border-black rounded-full px-3 py-1 bg-[#87CEFA] hover:bg-[#6cc0f5] transition-colors shadow-[2px_2px_0px_0px_#111]"
+                            >
+                              <Pencil size={12} strokeWidth={3} /> Edit
+                            </button>
+                          </div>
+                          <CourseCard
+                            course={child}
+                            index={i}
+                            isMyLearning={false}
+                            onClick={(id) => navigate(`/course/${id}`)}
+                          />
+                        </div>
                       ))
                     )}
                   </div>
@@ -214,6 +360,7 @@ export default function EducatorDashboardPage() {
         onClose={closeModal}
         onSave={loadMyCourses}
         parentCourseId={modalParentId}
+        course={editingCourse}
       />
     </div>
   );

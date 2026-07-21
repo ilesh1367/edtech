@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { X, UploadCloud } from 'lucide-react';
 import Button from '../ui/Button.jsx';
+import { fetchAPI } from '../../services/api.js';
 
 export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSave, initialTab = 'video' }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(false);
-  const [priority, setPriority] = useState(0); // 🌟 Reset to 0
   const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
@@ -16,7 +16,6 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       setDescription('');
       setFile(null);
       setPreview(false);
-      setPriority(0); // Reset to 0
     }
   }, [isOpen]);
 
@@ -39,30 +38,20 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       formData.append('description', description);
       formData.append('file', file);
       formData.append('preview', preview);
-      formData.append('priority', priority); 
-      formData.append('content_type', isVideo ? 'video' : 'pdf'); // 🌟 Kept the fix!
+      formData.append('content_type', isVideo ? 'video' : 'pdf');
 
       if (folderId) {
         formData.append('folder_id', folderId);
       }
 
-      const endpoint = isVideo 
-        ? `/content/upload-video?moduleId=${moduleId}` 
+      const endpoint = isVideo
+        ? `/content/upload-video?moduleId=${moduleId}`
         : `/content/upload?moduleId=${moduleId}`;
 
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
+      await fetchAPI(endpoint, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
         body: formData,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Upload failed');
-      }
 
       onSave();
       onClose();
@@ -76,47 +65,34 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
       <div className="relative w-full max-w-lg bg-[#F4DFD8] border-[3px] border-black rounded-2xl flex flex-col shadow-[8px_8px_0px_0px_#111]">
-        
+
         <div className="flex justify-between items-center p-4 border-b-[3px] border-black bg-white rounded-t-xl">
           <h3 className="font-bold text-xl uppercase">Add {isVideo ? 'Video' : 'PDF'}</h3>
           <button onClick={onClose} className="w-8 h-8 border-[3px] border-black bg-[#F26B4D] rounded-full flex items-center justify-center font-bold hover:scale-110 transition-transform">
             <X size={16} strokeWidth={3} />
           </button>
         </div>
-        
+
         <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-4 bg-white rounded-b-xl">
           <div>
             <label className="font-bold text-sm ml-1 mb-1 block">Title</label>
-            <input 
-              required 
-              value={title} 
-              onChange={e => setTitle(e.target.value)} 
-              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
+            <input
+              required
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]"
               placeholder="e.g. Chapter 1 Introduction"
             />
           </div>
 
           <div>
             <label className="font-bold text-sm ml-1 mb-1 block">Description</label>
-            <textarea 
-              value={description} 
-              onChange={e => setDescription(e.target.value)} 
-              rows={2} 
-              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              rows={2}
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]"
             />
-          </div>
-
-          {/* 🌟 Restored Number Priority Field */}
-          <div>
-            <label className="font-bold text-sm ml-1 mb-1 block">Display Priority (Order)</label>
-            <input 
-              type="number" 
-              value={priority} 
-              onChange={(e) => setPriority(e.target.value)} 
-              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-bold focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
-              placeholder="0 = first, 1 = second..."
-            />
-            <p className="text-xs text-gray-500 mt-1 ml-1 font-medium">Items with lower numbers appear first in the tab.</p>
           </div>
 
           <div>
@@ -131,18 +107,18 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
                   {isVideo ? 'MP4, WebM (Max 500MB)' : 'PDF only (Max 50MB)'}
                 </p>
               </div>
-              <input 
-                type="file" 
-                className="hidden" 
+              <input
+                type="file"
+                className="hidden"
                 accept={isVideo ? "video/*" : "application/pdf"}
-                onChange={(e) => setFile(e.target.files[0])} 
+                onChange={(e) => setFile(e.target.files[0])}
               />
             </label>
           </div>
 
           <div className="flex items-center gap-2 mt-2">
-            <input 
-              type="checkbox" 
+            <input
+              type="checkbox"
               id="preview"
               checked={preview}
               onChange={(e) => setPreview(e.target.checked)}
@@ -154,16 +130,16 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
           </div>
 
           <div className="flex justify-end gap-3 mt-4">
-            <button 
-              type="button" 
-              onClick={onClose} 
+            <button
+              type="button"
+              onClick={onClose}
               className="px-6 py-2 border-[3px] border-black rounded-xl font-bold hover:bg-gray-100 transition-colors"
             >
               Cancel
             </button>
-            <Button 
-              type="submit" 
-              variant="primary" 
+            <Button
+              type="submit"
+              variant="primary"
               disabled={isUploading}
               className="py-2"
             >
