@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, GraduationCap, ChevronRight, Layers } from 'lucide-react';
+import { Plus, GraduationCap, ChevronRight, Layers, Trash2, Pencil, ChevronUp, ChevronDown } from 'lucide-react';
 import CourseCard from '../components/course/CourseCard.jsx';
 import Button from '../components/ui/Button.jsx';
 import CourseModal from '../components/educator/CourseModal.jsx';
@@ -19,6 +19,10 @@ export default function EducatorDashboardPage() {
   // creates a course linked to that course as its parent (row's "+ Add
   // Course" button).
   const [modalParentId, setModalParentId] = useState(null);
+
+  // When set to a course object -> the modal edits that course (title,
+  // description, price, status) instead of creating a new one.
+  const [editingCourse, setEditingCourse] = useState(null);
 
   // Tracks which single top-level course row is currently expanded.
   // null = nothing expanded.
@@ -43,6 +47,18 @@ export default function EducatorDashboardPage() {
     loadMyCourses();
   }, []);
 
+  const handleDeleteCourse = async (courseId) => {
+    if (!window.confirm("Are you sure you want to delete this class category? All subjects inside it will also be hidden.")) return;
+    try {
+      await fetchAPI(`/courses/${courseId}`, { method: 'DELETE' });
+      // Instantly remove it from the UI
+      setCourses(prev => prev.filter(c => c.id !== courseId && c.parent_course_id !== courseId));
+      if (selectedCourseId === courseId) setSelectedCourseId(null);
+    } catch (err) {
+      alert(err.message || 'Failed to delete course');
+    }
+  };
+
   // Only courses with no parent are shown as their own row on the
   // dashboard. Sub-courses (created via a row's "+ Add Course") stay
   // nested under their parent and are rendered only when that parent
@@ -50,7 +66,7 @@ export default function EducatorDashboardPage() {
   const topLevelCourses = courses.filter(c => !c.parent_course_id);
 
   // Dynamically looks up every course linked to a given parent id.
-  // No hardcoded names/ids — purely relationship-driven.
+  // No hardcoded names/ids -- purely relationship-driven.
   const getChildCourses = (parentId) =>
     courses.filter(c => c.parent_course_id === parentId);
 
@@ -73,92 +89,169 @@ export default function EducatorDashboardPage() {
 
   const openCreateModal = () => {
     setModalParentId(null);
+    setEditingCourse(null);
     setIsCourseModalOpen(true);
   };
 
   const openAddModal = (parentId) => {
     setModalParentId(parentId);
+    setEditingCourse(null);
+    setIsCourseModalOpen(true);
+  };
+
+  const openEditModal = (course) => {
+    setEditingCourse(course);
+    setModalParentId(null);
     setIsCourseModalOpen(true);
   };
 
   const closeModal = () => {
     setIsCourseModalOpen(false);
     setModalParentId(null);
+    setEditingCourse(null);
   };
 
-  const selectedCourse = topLevelCourses.find(c => c.id === selectedCourseId) || null;
-  const selectedChildCourses = selectedCourse ? getChildCourses(selectedCourse.id) : [];
-
   // Extracts a numeric class value from a title like "9th Class",
-  // "10th Class", "12th Class Physics" etc. Returns null if no
-  // class-number pattern is found. Purely pattern-based, no hardcoded
-  // course names/IDs.
+  // "10th Class", "12th Class Physics" etc. Used only as a tie-breaker
+  // when two courses share the same display_order (e.g. brand new
+  // courses that haven't been manually arranged yet).
   const getClassNumber = (title = '') => {
     const match = title.match(/(\d+)\s*(?:st|nd|rd|th)?\s*Class/i);
     return match ? parseInt(match[1], 10) : null;
   };
 
-  // Courses whose title matches "Nth Class..." are sorted numerically
-  // (9, 10, 11, 12, ...) and shown first. Every other course keeps
-  // appearing after them, in alphabetical order for a stable, predictable
-  // list. Fully dynamic — works no matter how many/which courses exist.
-  const sortedCourses = [...topLevelCourses].sort((a, b) => {
+  // Primary sort key is display_order (the mentor's manual priority set
+  // via the up/down arrows). Falls back to the class-number pattern, then
+  // alphabetical, only when display_order is tied -- e.g. right after a
+  // fresh course is created and hasn't been arranged yet.
+  const compareCourses = (a, b) => {
+    const orderA = a.display_order ?? 0;
+    const orderB = b.display_order ?? 0;
+    if (orderA !== orderB) return orderA - orderB;
+
     const numA = getClassNumber(a.title);
     const numB = getClassNumber(b.title);
-
     if (numA !== null && numB !== null) return numA - numB;
     if (numA !== null) return -1;
     if (numB !== null) return 1;
     return (a.title || '').localeCompare(b.title || '');
-  });
+  };
+
+  const sortedCourses = [...topLevelCourses].sort(compareCourses);
+
+  const selectedCourse = topLevelCourses.find(c => c.id === selectedCourseId) || null;
+  const selectedChildCourses = selectedCourse
+    ? getChildCourses(selectedCourse.id).sort(compareCourses)
+    : [];
+
+  // Sends the new order for one sibling group (either the top-level rows,
+  // or the child/subject courses under a single parent) to the backend,
+  // then reloads so the UI reflects the confirmed, saved state.
+  const persistOrder = (orderedIds) => {
+    fetchAPI('/courses/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds })
+    })
+      .then(() => loadMyCourses())
+      .catch(err => {
+        console.error('Failed to save order', err);
+        alert('Could not save the new order. Please try again.');
+        loadMyCourses();
+      });
+  };
+
+  // Moves a top-level course up or down among the other top-level rows.
+  const moveTopLevelCourse = (courseId, direction) => {
+    const list = [...sortedCourses];
+    const idx = list.findIndex(c => c.id === courseId);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= list.length) return;
+
+    [list[idx], list[swapIdx]] = [list[swapIdx], list[idx]];
+    persistOrder(list.map(c => c.id));
+  };
+
+  // Moves a child/subject course up or down only among its siblings under
+  // the same parent -- never mixed with any other course's children.
+  const moveChildCourse = (childId, direction, parentId) => {
+    const list = [...getChildCourses(parentId)].sort(compareCourses);
+    const idx = list.findIndex(c => c.id === childId);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= list.length) return;
+
+    [list[idx], list[swapIdx]] = [list[swapIdx], list[idx]];
+    persistOrder(list.map(c => c.id));
+  };
 
   return (
     <div className="pb-20 animate-in fade-in slide-in-from-bottom-5 duration-500">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
-            <div>
-                <h1 className="text-4xl font-bold tracking-tight mb-1 flex items-center gap-3">
-                    <GraduationCap size={40} className="text-[#F26B4D]" /> Educator Console
-                </h1>
-                <p className="text-gray-600 font-bold">Manage your curriculum and track student engagement.</p>
-            </div>
-            <Button variant="accent" onClick={openCreateModal} className="py-3 px-8 text-base border-[3px]">
-                <Plus size={20} className="mr-2 inline" /> Create New Course
-            </Button>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
+        <div>
+          <h1 className="text-4xl font-bold tracking-tight mb-1 flex items-center gap-3">
+            <GraduationCap size={40} className="text-[#F26B4D]" /> Educator Console
+          </h1>
+          <p className="text-gray-600 font-bold">Manage your curriculum and track student engagement.</p>
         </div>
+        <Button variant="accent" onClick={openCreateModal} className="py-3 px-8 text-base border-[3px]">
+          <Plus size={20} className="mr-2 inline" /> Create New Course
+        </Button>
+      </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-            <div className="bg-[#87CEFA] border-[3px] border-black rounded-2xl p-6 shadow-[8px_8px_0px_0px_#111]">
-                <div className="text-5xl font-black mb-1">{topLevelCourses.length}</div>
-                <div className="font-bold text-black uppercase text-sm tracking-widest">Total Courses</div>
-            </div>
-            <div className="bg-[#F9E076] border-[3px] border-black rounded-2xl p-6 shadow-[8px_8px_0px_0px_#111]">
-                <div className="text-5xl font-black mb-1">{publishedCount}</div>
-                <div className="font-bold text-black uppercase text-sm tracking-widest">Live Courses</div>
-            </div>
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+        <div className="bg-[#87CEFA] border-[3px] border-black rounded-2xl p-6 shadow-[8px_8px_0px_0px_#111]">
+          <div className="text-5xl font-black mb-1">{topLevelCourses.length}</div>
+          <div className="font-bold text-black uppercase text-sm tracking-widest">Total Courses</div>
         </div>
-        
-        <h2 className="text-3xl font-bold mb-8 tracking-tight">Your Courses</h2>
+        <div className="bg-[#F9E076] border-[3px] border-black rounded-2xl p-6 shadow-[8px_8px_0px_0px_#111]">
+          <div className="text-5xl font-black mb-1">{publishedCount}</div>
+          <div className="font-bold text-black uppercase text-sm tracking-widest">Live Courses</div>
+        </div>
+      </div>
 
-        {isLoading ? (
-          <div className="text-center font-bold text-gray-400 py-20">Loading Dashboard...</div>
-        ) : topLevelCourses.length === 0 ? (
-          <div className="bg-white border-[3px] border-black border-dashed rounded-3xl p-16 text-center">
-              <p className="text-gray-500 font-bold text-xl mb-6">No courses found in your library.</p>
-              <Button variant="primary" onClick={openCreateModal}>Get Started</Button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {sortedCourses.map((course) => {
-              const isSelected = course.id === selectedCourseId;
-              const childCount = getChildCourses(course.id).length;
-              return (
-                <div key={course.id} className="w-full">
-                  {/* Row: name + Add Course + View, dynamically rendered per course */}
-                  <div
-                    className={`flex items-center justify-between bg-white border-[3px] border-black rounded-2xl px-6 py-4 shadow-[6px_6px_0px_0px_#111] transition-all
-                      ${isSelected ? 'ring-2 ring-[#F26B4D]' : ''}`}
-                  >
+      <h2 className="text-3xl font-bold mb-8 tracking-tight">Your Courses</h2>
+
+      {isLoading ? (
+        <div className="text-center font-bold text-gray-400 py-20">Loading Dashboard...</div>
+      ) : topLevelCourses.length === 0 ? (
+        <div className="bg-white border-[3px] border-black border-dashed rounded-3xl p-16 text-center">
+          <p className="text-gray-500 font-bold text-xl mb-6">No courses found in your library.</p>
+          <Button variant="primary" onClick={openCreateModal}>Get Started</Button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {sortedCourses.map((course, courseIndex) => {
+            const isSelected = course.id === selectedCourseId;
+            const childCount = getChildCourses(course.id).length;
+
+            return (
+              <div key={course.id} className="w-full">
+                {/* Row: arrange arrows + name + Edit + Add Course + View + Delete */}
+                <div
+                  className={`flex items-center justify-between bg-white border-[3px] border-black rounded-2xl px-6 py-4 shadow-[6px_6px_0px_0px_#111] transition-all
+                    ${isSelected ? 'ring-2 ring-[#F26B4D]' : ''}`}
+                >
+                  <div className="flex items-center gap-4 min-w-0">
+                    {/* Arrange (priority) controls */}
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        onClick={() => moveTopLevelCourse(course.id, 'up')}
+                        disabled={courseIndex === 0}
+                        title="Move up"
+                        className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronUp size={14} strokeWidth={3} />
+                      </button>
+                      <button
+                        onClick={() => moveTopLevelCourse(course.id, 'down')}
+                        disabled={courseIndex === sortedCourses.length - 1}
+                        title="Move down"
+                        className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronDown size={14} strokeWidth={3} />
+                      </button>
+                    </div>
+
                     <div className="flex items-center gap-3 min-w-0">
                       <span className="font-black text-lg truncate">{course.title}</span>
                       <span className="text-[10px] font-bold uppercase tracking-wider bg-black text-white px-2 py-1 rounded-full shrink-0">
@@ -170,56 +263,105 @@ export default function EducatorDashboardPage() {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-4 shrink-0">
-                      <button
-                        onClick={() => openAddModal(course.id)}
-                        className="flex items-center gap-1 font-bold text-sm border-2 border-black rounded-full px-3 py-1.5 bg-[#F9E076] hover:bg-[#f5d84a] transition-colors shadow-[2px_2px_0px_0px_#111]"
-                      >
-                        <Plus size={16} strokeWidth={3} /> Add Course
-                      </button>
-                      <button
-                        onClick={() => handleToggleView(course.id)}
-                        className="flex items-center gap-1 font-bold underline decoration-2 underline-offset-4 hover:text-[#F26B4D] transition-colors"
-                      >
-                        {isSelected ? 'Hide' : 'View'}
-                        <ChevronRight
-                          size={18}
-                          className={`transition-transform ${isSelected ? 'rotate-90' : ''}`}
-                        />
-                      </button>
-                    </div>
                   </div>
 
-                  {/* Only render the child courses (subjects) belonging to this parent */}
-                  {isSelected && selectedCourse && (
-                    <div className="mt-6 mb-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16 items-start">
-                      {selectedChildCourses.length === 0 ? (
-                        <p className="text-gray-500 font-bold italic col-span-full pt-4">No subjects added to this class yet.</p>
-                      ) : (
-                        selectedChildCourses.map((child, i) => (
+                  <div className="flex items-center gap-3 shrink-0">
+                    <button
+                      onClick={() => openEditModal(course)}
+                      className="flex items-center gap-1 font-bold text-sm border-2 border-black rounded-full px-3 py-1.5 bg-[#87CEFA] hover:bg-[#6cc0f5] transition-colors shadow-[2px_2px_0px_0px_#111]"
+                    >
+                      <Pencil size={14} strokeWidth={3} /> Edit
+                    </button>
+                    <button
+                      onClick={() => openAddModal(course.id)}
+                      className="flex items-center gap-1 font-bold text-sm border-2 border-black rounded-full px-3 py-1.5 bg-[#F9E076] hover:bg-[#f5d84a] transition-colors shadow-[2px_2px_0px_0px_#111]"
+                    >
+                      <Plus size={16} strokeWidth={3} /> Add Course
+                    </button>
+                    <button
+                      onClick={() => handleToggleView(course.id)}
+                      className="flex items-center gap-1 font-bold underline decoration-2 underline-offset-4 hover:text-[#F26B4D] transition-colors"
+                    >
+                      {isSelected ? 'Hide' : 'View'}
+                      <ChevronRight
+                        size={18}
+                        className={`transition-transform ${isSelected ? 'rotate-90' : ''}`}
+                      />
+                    </button>
+
+                    {/* Delete Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteCourse(course.id);
+                      }}
+                      className="w-9 h-9 flex items-center justify-center bg-red-400 border-[3px] border-black rounded-xl hover:bg-red-500 hover:-translate-y-1 transition-all shadow-[4px_4px_0px_0px_#111] ml-2"
+                      title="Delete Class Category"
+                    >
+                      <Trash2 size={16} strokeWidth={3} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Only render the child courses (subjects) belonging to this parent */}
+                {isSelected && selectedCourse && (
+                  <div className="mt-6 mb-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16 items-start">
+                    {selectedChildCourses.length === 0 ? (
+                      <p className="text-gray-500 font-bold italic col-span-full pt-4">No subjects added to this class yet.</p>
+                    ) : (
+                      selectedChildCourses.map((child, i) => (
+                        <div key={child.id} className="flex flex-col gap-3">
+                          {/* Arrange + Edit controls for this subject */}
+                          <div className="flex items-center justify-between px-1">
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => moveChildCourse(child.id, 'up', selectedCourse.id)}
+                                disabled={i === 0}
+                                title="Move up"
+                                className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                              >
+                                <ChevronUp size={14} strokeWidth={3} />
+                              </button>
+                              <button
+                                onClick={() => moveChildCourse(child.id, 'down', selectedCourse.id)}
+                                disabled={i === selectedChildCourses.length - 1}
+                                title="Move down"
+                                className="w-6 h-6 border-2 border-black rounded flex items-center justify-center bg-white hover:bg-gray-100 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+                              >
+                                <ChevronDown size={14} strokeWidth={3} />
+                              </button>
+                            </div>
+                            <button
+                              onClick={() => openEditModal(child)}
+                              className="flex items-center gap-1 font-bold text-xs border-2 border-black rounded-full px-3 py-1 bg-[#87CEFA] hover:bg-[#6cc0f5] transition-colors shadow-[2px_2px_0px_0px_#111]"
+                            >
+                              <Pencil size={12} strokeWidth={3} /> Edit
+                            </button>
+                          </div>
                           <CourseCard
-                            key={child.id}
                             course={child}
                             index={i}
                             isMyLearning={false}
                             onClick={(id) => navigate(`/course/${id}`)}
                           />
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-        <CourseModal 
-            isOpen={isCourseModalOpen} 
-            onClose={closeModal} 
-            onSave={loadMyCourses}
-            parentCourseId={modalParentId}
-        />
+      <CourseModal
+        isOpen={isCourseModalOpen}
+        onClose={closeModal}
+        onSave={loadMyCourses}
+        parentCourseId={modalParentId}
+        course={editingCourse}
+      />
     </div>
   );
 }

@@ -122,9 +122,11 @@ router.get("/:id", async (req, res) => {
         for (const module of modulesResult.rows) {
             let contents = [];
             if (module.content_ids && module.content_ids.length > 0) {
+                // priority and file_size_bytes are included so the up/down
+                // arrange arrows and file size display work correctly.
                 const contentResult = await pool.query(`
                     SELECT id, title, description, content_type, duration_seconds,
-                           thumbnail_url, preview, created_at
+                           thumbnail_url, preview, priority, file_size_bytes, created_at
                     FROM content_items
                     WHERE id = ANY($1::uuid[])
                     AND status = 'ready'
@@ -173,13 +175,7 @@ router.post("/", authMiddleware, async (req, res) => {
             return res.status(403).json({ error: "Only educators can create courses" });
         }
 
-        // TEMPORARY DEBUG LOGS - safe to remove once everything is confirmed working.
-        console.log("========================================");
-        console.log("POST /courses -> req.body received:", req.body);
-
         const { title, description, price, status, parent_course_id } = req.body;
-
-        console.log("Extracted parent_course_id value:", parent_course_id);
 
         const client = await pool.connect();
 
@@ -192,9 +188,6 @@ router.post("/", authMiddleware, async (req, res) => {
             `, [req.user.id, title, description, price || 0, status || "draft", parent_course_id || null]);
 
             const course = courseResult.rows[0];
-
-            console.log("Course row saved in DB with parent_course_id:", course.parent_course_id);
-            console.log("========================================");
 
             const moduleResult = await client.query(`
                 INSERT INTO modules (course_id, title, description, module_order, content_ids, is_active)
@@ -220,6 +213,51 @@ router.post("/", authMiddleware, async (req, res) => {
     } catch (err) {
         console.error("Course creation error:", err);
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// PUT /api/courses/reorder
+// This MUST stay above "PUT /:id" below. Express matches routes in the
+// order they are registered in this file - without this dedicated route,
+// a PUT to "/courses/reorder" was being caught by the generic "PUT /:id"
+// route further down, with `id` literally equal to the string "reorder".
+// That route ran `UPDATE courses ... WHERE id = 'reorder'`, which never
+// matches a real course, so nothing was ever saved - the request looked
+// successful (200 response) but the order silently reset on refresh, and
+// the up/down arrows appeared broken.
+router.put("/reorder", authMiddleware, async (req, res) => {
+    try {
+        const { orderedIds } = req.body;
+
+        if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+            return res.status(400).json({ error: "orderedIds array is required" });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+
+            for (let i = 0; i < orderedIds.length; i++) {
+                await client.query(
+                    `UPDATE courses
+                     SET display_order = $1, updated_at = NOW()
+                     WHERE id = $2 AND educator_id = $3`,
+                    [i, orderedIds[i], req.user.id]
+                );
+            }
+
+            await client.query("COMMIT");
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+
+        res.json({ success: true, message: "Order updated" });
+    } catch (err) {
+        console.error("Reorder error:", err);
+        res.status(500).json({ error: err.message });
     }
 });
 

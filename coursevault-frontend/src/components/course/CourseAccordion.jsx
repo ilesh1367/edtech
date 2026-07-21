@@ -22,24 +22,16 @@ export default function CourseAccordion({
 }) {
   const contents = module.contents || [];
 
-  // UI State
-  const [activeTabId, setActiveTabId] = useState(null); // null = General Tab
+  const [activeTabId, setActiveTabId] = useState(null);
   const [expandedVideoId, setExpandedVideoId] = useState(null);
-
-  // Quiz State
   const [quizzes, setQuizzes] = useState([]);
   const [quizzesLoaded, setQuizzesLoaded] = useState(false);
   const [isQuizModalOpen, setIsQuizModalOpen] = useState(false);
   const [takingQuizId, setTakingQuizId] = useState(null);
-
-  // Folder (Tab) State
   const [folders, setFolders] = useState([]);
   const [foldersLoaded, setFoldersLoaded] = useState(false);
-
-  // Bulk Move State
   const [selectedContentIds, setSelectedContentIds] = useState([]);
 
-  // --- Data Fetching ---
   const loadQuizzes = async () => {
     try {
       const data = await fetchAPI(`/quiz/module/${module.id}`);
@@ -69,7 +61,6 @@ export default function CourseAccordion({
     }
   }, [isOpen, quizzesLoaded, foldersLoaded]);
 
-  // --- Tab (Folder) Actions ---
   const handleCreateTab = async () => {
     const title = window.prompt("Enter new tab name (e.g., Chapter 1):");
     if (!title) return;
@@ -98,20 +89,6 @@ export default function CourseAccordion({
     }
   };
 
-  // --- Priority Actions ---
-  const handleUpdatePriority = async (contentId, newPriority) => {
-    try {
-      await fetchAPI(`/content/${contentId}/priority`, {
-        method: 'PUT',
-        body: JSON.stringify({ priority: newPriority })
-      });
-      if (onRefreshCurriculum) onRefreshCurriculum();
-    } catch (err) {
-      alert("Failed to update priority");
-    }
-  };
-
-  // --- Bulk Move Actions ---
   const toggleContentSelection = (id) => {
     setSelectedContentIds(prev =>
       prev.includes(id) ? prev.filter(cId => cId !== id) : [...prev, id]
@@ -136,7 +113,18 @@ export default function CourseAccordion({
     }
   };
 
-  // --- Content Deletion ---
+  const handleUpdatePriority = async (contentId, newPriority) => {
+    try {
+      await fetchAPI(`/content/${contentId}/priority`, {
+        method: 'PUT',
+        body: JSON.stringify({ priority: newPriority })
+      });
+      if (onRefreshCurriculum) onRefreshCurriculum();
+    } catch (err) {
+      alert("Failed to update priority");
+    }
+  };
+
   const handleDeleteContent = async (e, contentId) => {
     e.stopPropagation();
     if (!window.confirm('Delete this content item?')) return;
@@ -159,8 +147,7 @@ export default function CourseAccordion({
     }
   };
 
-  // --- Get Active Content (Sorted by Priority: 1=High, 2=Medium, 3=Low) ---
-  const getPriorityLevel = (p) => (!p || p === 0 ? 2 : p);
+  const getPriorityLevel = (p) => (!p || p === 0 ? 2 : p); // Default unassigned to Medium (2)
 
   const activeContents = contents
     .filter(c => activeTabId === null ? !c.folder_id : c.folder_id === activeTabId)
@@ -200,7 +187,6 @@ export default function CourseAccordion({
         </div>
       </div>
 
-      {/* Module Content Body */}
       {isOpen && (
         <div className="border-t-2 border-black bg-gray-50 flex flex-col animate-in fade-in slide-in-from-top-4 duration-300">
 
@@ -270,7 +256,6 @@ export default function CourseAccordion({
               </div>
             )}
 
-            {/* Bulk Action Bar (Creator only) */}
             {selectedContentIds.length > 0 && isCreator && (
               <div className="bg-[#A7E2D1] border-2 border-black p-2.5 md:p-3 rounded-lg flex items-center justify-between shadow-[2px_2px_0px_0px_#111] mb-4 md:mb-6 animate-in fade-in zoom-in duration-200">
                 <span className="font-bold text-sm">{selectedContentIds.length} items selected</span>
@@ -290,7 +275,6 @@ export default function CourseAccordion({
               </div>
             )}
 
-            {/* Empty State */}
             {activeContents.length === 0 && activeQuizzes.length === 0 ? (
               <div className="text-center border-2 border-dashed border-gray-300 rounded-xl py-8 md:py-12">
                 <p className="text-gray-500 font-bold text-sm md:text-base mb-2">This tab is empty.</p>

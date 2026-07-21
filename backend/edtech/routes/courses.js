@@ -5,8 +5,9 @@ import authMiddleware from "../middleware/auth.js";
 const router = express.Router();
 
 // GET /api/courses
-// GET /api/courses
-// GET /api/courses
+// Now ordered by display_order first (the mentor's manual priority),
+// falling back to created_at so newly created courses without an
+// explicit order still appear in a sensible place.
 router.get("/", async (req, res) => {
     try {
         const result = await pool.query(`
@@ -14,13 +15,14 @@ router.get("/", async (req, res) => {
             FROM courses c
             JOIN users u ON c.educator_id = u.id
             WHERE c.is_active = true AND c.deleted_at IS NULL
-            ORDER BY c.created_at DESC
+            ORDER BY COALESCE(c.display_order, 0) ASC, c.created_at ASC
         `);
         res.json({ success: true, courses: result.rows });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
 // GET /api/my-courses
 router.get("/my-courses", authMiddleware, async (req, res) => {
     try {
@@ -64,7 +66,7 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
                 WHERE c.educator_id = $1
                     AND c.deleted_at IS NULL
                 GROUP BY c.id, u.name
-                ORDER BY c.created_at DESC
+                ORDER BY COALESCE(c.display_order, 0) ASC, c.created_at ASC
             `, [userId]);
             courses = result.rows;
         } else if (userRole === "admin") {
@@ -95,7 +97,51 @@ router.get("/my-courses", authMiddleware, async (req, res) => {
     }
 });
 
-// GET /api/courses/:id
+// PUT /api/courses/reorder
+// Body: { orderedIds: [id1, id2, id3, ...] }
+// The array's position becomes each course's new display_order (0-based).
+// This is called for a single sibling group at a time -- either the
+// top-level course rows, or the child/subject courses under one parent --
+// so ordering never mixes unrelated groups together.
+// IMPORTANT: this route must be declared before "/:id" routes below,
+// otherwise Express would try to treat "reorder" as an :id parameter.
+router.put("/reorder", authMiddleware, async (req, res) => {
+    try {
+        const { orderedIds } = req.body;
+
+        if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+            return res.status(400).json({ error: "orderedIds array is required" });
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query("BEGIN");
+
+            for (let i = 0; i < orderedIds.length; i++) {
+                await client.query(
+                    `UPDATE courses
+                     SET display_order = $1, updated_at = NOW()
+                     WHERE id = $2 AND educator_id = $3`,
+                    [i, orderedIds[i], req.user.id]
+                );
+            }
+
+            await client.query("COMMIT");
+
+            res.json({ success: true, message: "Order updated successfully" });
+        } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        console.error("Reorder error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // GET /api/courses/:id
 router.get("/:id", async (req, res) => {
     try {
@@ -105,7 +151,7 @@ router.get("/:id", async (req, res) => {
             SELECT c.*, u.name as educator_name
             FROM courses c
             JOIN users u ON c.educator_id = u.id
-            WHERE c.id = $1 AND c.deleted_at IS NULL
+            WHERE c.id = $1 AND c.status = 'published' AND c.is_active = true
         `, [id]);
 
         if (courseResult.rows.length === 0) {
@@ -124,15 +170,13 @@ router.get("/:id", async (req, res) => {
         for (const module of modulesResult.rows) {
             let contents = [];
             if (module.content_ids && module.content_ids.length > 0) {
-                // 🌟 FIX: The priority query MUST be inside this loop!
                 const contentResult = await pool.query(`
                     SELECT id, title, description, content_type, duration_seconds,
-                           thumbnail_url, preview, created_at, folder_id, priority
+                           thumbnail_url, preview, created_at
                     FROM content_items
                     WHERE id = ANY($1::uuid[])
                     AND status = 'ready'
-                    ORDER BY priority ASC, created_at ASC
-                `, [module.content_ids]); // Notice it uses `module` here because of the loop variable
+                `, [module.content_ids]);
                 contents = contentResult.rows;
             }
             modules.push({ ...module, contents });
@@ -144,10 +188,8 @@ router.get("/:id", async (req, res) => {
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith("Bearer ")) {
             try {
-                // If you haven't imported 'jwt' in courses.js, you might need to add: 
-                // import jwt from "jsonwebtoken"; at the top of the file!
                 const token = authHeader.split(" ")[1];
-                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                const decoded = jwt.verify(token, JWT_SECRET);
 
                 const enrollmentCheck = await pool.query(
                     `SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2`,
@@ -171,15 +213,13 @@ router.get("/:id", async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 // POST /api/courses
 router.post("/", authMiddleware, async (req, res) => {
     try {
         if (req.user.role !== "educator" && req.user.role !== "admin") {
             return res.status(403).json({ error: "Only educators can create courses" });
         }
-
-        // DEBUG LOG - remove later once confirmed working.
-        console.log("POST /courses received body:", req.body);
 
         const { title, description, price, status, parent_course_id } = req.body;
 
@@ -194,8 +234,6 @@ router.post("/", authMiddleware, async (req, res) => {
             `, [req.user.id, title, description, price || 0, status || "draft", parent_course_id || null]);
 
             const course = courseResult.rows[0];
-
-            console.log("Course created with parent_course_id:", course.parent_course_id);
 
             const moduleResult = await client.query(`
                 INSERT INTO modules (course_id, title, description, module_order, content_ids, is_active)

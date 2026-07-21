@@ -7,14 +7,19 @@ export default function InlineVideoPlayer({ content, courseId, isEnrolled }) {
   const [loading, setLoading] = useState(true);
   const [streamUrl, setStreamUrl] = useState(null);
   const [error, setError] = useState(null);
-  const [savedPosition, setSavedPosition] = useState(0);
 
   const videoRef = useRef(null);
   const hlsRef = useRef(null);
+  
+  const savedPositionRef = useRef(0);
   const currentPosRef = useRef(0);
+  const lastSavedPosRef = useRef(0);
 
   const targetContentId = content?.id;
+  const isPreview = content?.preview === true;
+  const shouldTrackProgress = isEnrolled || isPreview;
 
+  // 1. Initial configuration and progress history lookup
   useEffect(() => {
     if (!targetContentId) return;
     
@@ -32,18 +37,27 @@ export default function InlineVideoPlayer({ content, courseId, isEnrolled }) {
         const streamData = await fetchAPI(`/content/${targetContentId}/stream?courseId=${courseId}`);
 
         let initialPos = 0;
-        if (isEnrolled) {
+        if (shouldTrackProgress) {
           try {
-            const progressData = await fetchAPI(`/video/progress/${targetContentId}`);
-            if (progressData.hasProgress) initialPos = parseFloat(progressData.position);
-          } catch (_) {}
+            const progressData = await fetchAPI(`/video/progress/${targetContentId}?courseId=${courseId}`);
+            if (progressData.hasProgress) {
+              initialPos = parseFloat(progressData.position);
+            }
+          } catch (_) {
+            // Default back to beginning gracefully
+          }
         }
 
         if (cancelled) return;
-        setSavedPosition(initialPos);
+        
+        savedPositionRef.current = initialPos;
         currentPosRef.current = initialPos;
+        lastSavedPosRef.current = initialPos;
 
-        if (streamData.hlsUrl) {
+        // 🚀 Handle Processing States vs Ready HLS Playback URLs
+        if (streamData.status === 'processing') {
+          setError('Video is still processing and transcoding. Please check back in a moment!');
+        } else if (streamData.hlsUrl) {
           const token = localStorage.getItem('token');
           const backendDomain = (import.meta && import.meta.env && import.meta.env.VITE_API_URL)
             ? import.meta.env.VITE_API_URL.replace('/api', '')
@@ -61,16 +75,25 @@ export default function InlineVideoPlayer({ content, courseId, isEnrolled }) {
 
     init();
     return () => { cancelled = true; };
-  }, [targetContentId, courseId, isEnrolled]);
+  }, [targetContentId, courseId, shouldTrackProgress]);
 
+  // 2. Bind player engine instances exactly ONCE per unique stream URL.
   useEffect(() => {
     if (!streamUrl || !videoRef.current) return;
 
     const videoEl = videoRef.current;
+    
     const syncTime = () => {
       currentPosRef.current = videoEl.currentTime;
     };
     videoEl.addEventListener('timeupdate', syncTime);
+
+    const applyInitialSeek = () => {
+      if (savedPositionRef.current > 0) {
+        videoEl.currentTime = savedPositionRef.current;
+        savedPositionRef.current = 0; 
+      }
+    };
 
     if (Hls.isSupported()) {
       const hls = new Hls({ maxMaxBufferLength: 30 });
@@ -79,7 +102,7 @@ export default function InlineVideoPlayer({ content, courseId, isEnrolled }) {
       hls.attachMedia(videoEl);
       
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (savedPosition > 0) videoEl.currentTime = savedPosition;
+        applyInitialSeek();
       });
 
       return () => {
@@ -88,31 +111,50 @@ export default function InlineVideoPlayer({ content, courseId, isEnrolled }) {
       };
     } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
       videoEl.src = streamUrl;
-      
-      const handleMetadata = () => {
-        if (savedPosition > 0) videoEl.currentTime = savedPosition;
-      };
-      videoEl.addEventListener('loadedmetadata', handleMetadata);
+      videoEl.addEventListener('loadedmetadata', applyInitialSeek);
       
       return () => {
         videoEl.removeEventListener('timeupdate', syncTime);
-        videoEl.removeEventListener('loadedmetadata', handleMetadata);
+        videoEl.removeEventListener('loadedmetadata', applyInitialSeek);
       };
     }
-  }, [streamUrl, savedPosition]);
+  }, [streamUrl]);
 
+  // 3. Progress Sync Loop + Reliable Unmount Tracking
   useEffect(() => {
-    if (!targetContentId || !courseId || !isEnrolled) return;
+    if (!targetContentId || !courseId || !shouldTrackProgress) return;
 
     const saveProgress = async (positionToSave) => {
       const pos = Math.round(positionToSave);
-      if (pos <= 0) return;
+      if (pos <= 0 || pos === Math.round(lastSavedPosRef.current)) return;
+
       try {
         await fetchAPI('/video/progress', {
           method: 'POST',
           body: JSON.stringify({ contentId: targetContentId, courseId, position: pos }),
         });
+        lastSavedPosRef.current = pos;
       } catch (_) {}
+    };
+
+    const syncOnUnmount = () => {
+      const finalPos = Math.round(currentPosRef.current);
+      if (finalPos <= 0 || finalPos === Math.round(lastSavedPosRef.current)) return;
+
+      const token = localStorage.getItem('token');
+      const baseUrl = (import.meta && import.meta.env && import.meta.env.VITE_API_URL)
+        ? import.meta.env.VITE_API_URL
+        : 'http://localhost:3000/api';
+
+      fetch(`${baseUrl}/video/progress`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ contentId: targetContentId, courseId, position: finalPos }),
+        keepalive: true 
+      }).catch(() => {});
     };
 
     const intervalId = setInterval(() => {
@@ -123,11 +165,9 @@ export default function InlineVideoPlayer({ content, courseId, isEnrolled }) {
 
     return () => {
       clearInterval(intervalId);
-      if (currentPosRef.current > 0) {
-        saveProgress(currentPosRef.current);
-      }
+      syncOnUnmount();
     };
-  }, [targetContentId, courseId, isEnrolled]);
+  }, [targetContentId, courseId, shouldTrackProgress]);
 
   if (!content || !content.id) return null;
 
