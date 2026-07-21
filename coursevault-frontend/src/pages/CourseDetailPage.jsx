@@ -226,14 +226,14 @@ export default function CourseDetailPage() {
            </button>
          </>
       ) : (
-        <Button 
-          variant="secondary" 
-          onClick={isEnrolled ? () => {} : handleEnroll} 
-          disabled={isEnrolling}
-          className="px-6 md:px-10 py-2 md:py-3 text-sm md:text-base rounded-full border-2 md:border-[3px]"
-        >
-          {isEnrolling ? 'Processing...' : isEnrolled ? 'Continue Learning' : `Enroll - ₹${course.price}`}
-        </Button>
+       <Button 
+  variant="secondary" 
+  onClick={isEnrolled ? () => {} : handleEnroll} 
+  disabled={isEnrolling}
+  className="px-4 md:px-10 py-2 md:py-3 text-xs md:text-base rounded-lg md:rounded-full border-2 md:border-[3px] w-auto"
+>
+  {isEnrolling ? 'Processing...' : isEnrolled ? 'Continue Learning' : `Enroll - ₹${course.price}`}
+</Button>
       )}
     </div>
   </div>

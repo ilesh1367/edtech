@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, BookOpen, Lock, ShoppingCart } from 'lucide-react';
+import { Play, BookOpen, Lock } from 'lucide-react';
 import Badge from '../ui/Badge.jsx';
 import { getBgColor, getTagColor } from '../../utils/format.js';
 
@@ -61,32 +61,26 @@ export default function CourseCard({ course, index, onClick, onBuyCourse, isMyLe
             <Badge colorClass={tagColor}>{course.category || 'General'}</Badge>
           </div>
           <h3 className="text-sm md:text-2xl font-bold leading-tight mb-0.5 md:mb-2 pr-2 line-clamp-2">{course.title}</h3>
-          <p className="text-gray-600 font-medium text-[11px] md:text-sm mb-2 md:mb-4">
-            By {course.educator_name || 'an educator'}
-          </p>
+          <p className="flex items-center gap-1.5 text-gray-600 font-bold text-[11px] md:text-sm mb-2 md:mb-4">
+  <span className="inline-flex items-center justify-center w-5 h-5 md:w-6 md:h-6 rounded-full bg-[#F9E076] border border-black text-[10px] md:text-xs">
+    🧑‍🏫
+  </span>
+  {course.educator_name && course.educator_name.toLowerCase() !== 'anon' 
+    ? `Taught by ${course.educator_name}` 
+    : 'Taught by Shardha Vidyapeeth'}
+</p>
 
-          <div className="mt-auto flex justify-between items-end">
-            <span className="font-bold text-xs md:text-lg underline decoration-2 underline-offset-4 md:group-hover:text-[#F26B4D] transition-colors">
-              {isMyLearning ? 'Continue' : 'View Details'}
-            </span>
-
-            {needsPurchase ? (
-              <button
-                onClick={handleCtaClick}
-                className="flex items-center gap-1.5 px-3 py-2 md:px-4 md:py-2.5 rounded-full bg-[#F26B4D] border-2 border-black font-bold text-[11px] md:text-sm z-20 transition-transform md:group-hover:scale-105 shadow-[1px_1px_0px_0px_#111] md:shadow-[2px_2px_0px_0px_#111]"
-              >
-                <ShoppingCart size={13} className="md:w-4 md:h-4" />
-                Buy
-              </button>
-            ) : (
-              <button
-                onClick={handleCtaClick}
-                className="w-8 h-8 md:w-12 md:h-12 rounded-full bg-[#F26B4D] border-2 border-black flex items-center justify-center z-20 transition-transform md:group-hover:scale-110 shadow-[1px_1px_0px_0px_#111] md:shadow-[2px_2px_0px_0px_#111]"
-              >
-                <Play fill="black" size={13} className="md:hidden ml-0.5 text-black" />
-                <Play fill="black" size={20} className="hidden md:block ml-1 text-black" />
-              </button>
-            )}
+          <div className="mt-auto flex justify-end items-end">
+            <button
+              onClick={handleCtaClick}
+              className="w-8 h-8 md:w-12 md:h-12 rounded-full bg-[#F26B4D] border-2 border-black flex items-center justify-center z-20 transition-transform md:group-hover:scale-110 shadow-[1px_1px_0px_0px_#111] md:shadow-[2px_2px_0px_0px_#111]"
+            >
+              {needsPurchase && (
+                <Lock size={11} className="absolute -top-1 -right-1 bg-black text-white rounded-full p-0.5 md:w-4 md:h-4" />
+              )}
+              <Play fill="black" size={13} className="md:hidden ml-0.5 text-black" />
+              <Play fill="black" size={20} className="hidden md:block ml-1 text-black" />
+            </button>
           </div>
         </div>
       </div>
