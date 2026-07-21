@@ -54,18 +54,18 @@ export default function ExplorePage() {
 
   return (
     <>
-      <header className="relative pt-10 pb-20 text-center flex flex-col items-center justify-center">
-        <div className="absolute top-0 left-10 text-black animate-float-icon">
-            <Bot size={40} strokeWidth={1.5} />
-        </div>
-        <div className="absolute top-10 right-20 text-black animate-float-icon" style={{ animationDelay: '1s' }}>
-            <Microscope size={40} strokeWidth={1.5} />
-        </div>
-        
-        <h1 className="text-5xl md:text-7xl font-bold leading-[1.1] tracking-tight relative z-10 max-w-4xl">
-          Educational content <br /> for curious minds.
-        </h1>
-      </header>
+      <header className="relative pt-2 md:pt-10 pb-2 md:pb-20 text-center flex flex-col items-center justify-center">
+  <div className="hidden md:block absolute top-0 left-10 text-black animate-float-icon">
+      <Bot size={40} strokeWidth={1.5} />
+  </div>
+  <div className="hidden md:block absolute top-10 right-20 text-black animate-float-icon" style={{ animationDelay: '1s' }}>
+      <Microscope size={40} strokeWidth={1.5} />
+  </div>
+  
+  <h1 className="hidden md:block text-4xl md:text-7xl font-bold leading-[1.15] md:leading-[1.1] tracking-tight relative z-10 max-w-4xl">
+    Educational content <br /> for curious minds.
+  </h1>
+</header>
 
       <div className="pb-20">
         {isLoading ? (
@@ -80,7 +80,7 @@ export default function ExplorePage() {
                  ========================================= */
               <>
                 <h2 className="text-4xl font-bold tracking-tight mb-8">All Classes</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16 items-start animate-in fade-in zoom-in-95 duration-300">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-2 md:gap-y-16 items-start animate-in fade-in zoom-in-95 duration-300">
                   {topLevelCourses.map((course, index) => (
                     <CourseCard 
                       key={course.id} 
@@ -99,21 +99,23 @@ export default function ExplorePage() {
                  ========================================= */
               <div className="animate-in slide-in-from-right-8 fade-in duration-300">
                 
+               
                 {/* Navigation Header */}
-                <div className="flex flex-col md:flex-row md:items-center gap-4 mb-8">
-                  <button 
-                    onClick={() => setSelectedParentId(null)}
-                    className="flex items-center gap-2 bg-white border-2 border-black rounded-lg px-4 py-2 font-bold hover:bg-[#F9E076] transition-colors shadow-[2px_2px_0px_0px_#111] self-start"
-                  >
-                    ← Back to All Classes
-                  </button>
-                  <h2 className="text-3xl font-black">
-                    {selectedParentCourse?.title} Subjects
-                  </h2>
-                </div>
+<div className="flex items-center gap-3 mb-4 md:mb-8">
+  <button 
+    onClick={() => setSelectedParentId(null)}
+    className="flex-shrink-0 flex items-center justify-center w-9 h-9 md:w-auto md:h-auto md:px-4 md:py-2 bg-white border-2 border-black rounded-full md:rounded-lg font-bold hover:bg-[#F9E076] transition-colors shadow-[2px_2px_0px_0px_#111]"
+  >
+    <span className="md:hidden text-lg leading-none">←</span>
+    <span className="hidden md:inline">← Back to All Classes</span>
+  </button>
+  <h2 className="text-2xl md:text-3xl font-black">
+    {selectedParentCourse?.title} Subjects
+  </h2>
+</div>
 
                 {/* The Subjects Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16 items-start">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-2 md:gap-y-16 items-start">
                   {childCourses.length === 0 ? (
                     <div className="col-span-full bg-white border-2 border-dashed border-black rounded-xl p-12 text-center text-gray-500 font-bold text-lg shadow-[4px_4px_0px_0px_#111]">
                       No subjects published in this class yet.
