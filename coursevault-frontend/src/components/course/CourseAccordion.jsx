@@ -89,18 +89,6 @@ export default function CourseAccordion({
     }
   };
 
-  const handleUpdatePriority = async (contentId, newPriority) => {
-    try {
-      await fetchAPI(`/content/${contentId}/priority`, {
-        method: 'PUT',
-        body: JSON.stringify({ priority: newPriority })
-      });
-      if (onRefreshCurriculum) onRefreshCurriculum();
-    } catch (err) {
-      alert("Failed to update priority");
-    }
-  };
-
   const toggleContentSelection = (id) => {
     setSelectedContentIds(prev => 
       prev.includes(id) ? prev.filter(cId => cId !== id) : [...prev, id]
@@ -147,10 +135,8 @@ export default function CourseAccordion({
     }
   };
 
-  // 🌟 Restored Numeric Sorting (Smallest number first)
   const activeContents = contents
-    .filter(c => activeTabId === null ? !c.folder_id : c.folder_id === activeTabId)
-    .sort((a, b) => (a.priority || 0) - (b.priority || 0));
+    .filter(c => activeTabId === null ? !c.folder_id : c.folder_id === activeTabId);
   
   const activeQuizzes = quizzes.filter(q => 
     activeTabId === null ? !q.folder_id : q.folder_id === activeTabId
@@ -297,20 +283,6 @@ export default function CourseAccordion({
                                         <h4 className="font-bold text-lg leading-none mb-1">{content.title}</h4>
                                         {!isVideo && <p className="text-sm font-medium text-gray-500">PDF • {formatSize(content.file_size_bytes)}</p>}
                                         {isVideo && <p className="text-sm font-medium text-gray-500">Video Lesson</p>}
-                                        
-                                        {/* 🌟 Restored Inline Number Input */}
-                                        {isCreator && (
-                                          <div className="flex items-center gap-2 mt-2">
-                                            <span className="text-[10px] font-black uppercase tracking-wider text-[#F26B4D]">Priority:</span>
-                                            <input 
-                                              type="number" 
-                                              defaultValue={content.priority || 0}
-                                              onBlur={(e) => handleUpdatePriority(content.id, e.target.value)}
-                                              className="w-16 border-2 border-black rounded bg-[#F4F4F4] text-center text-xs font-bold outline-none focus:bg-white focus:ring-2 focus:ring-[#F26B4D] transition-all py-0.5"
-                                              title="Lower numbers appear first. Click away to save."
-                                            />
-                                          </div>
-                                        )}
                                     </div>
                                 </div>
                                 
