@@ -12,16 +12,15 @@ async function authMiddleware(req, res, next) {
       console.log(`📦 Params:`, req.params);
       console.log(`📦 Query Params:`, req.query);
       
-      // ========== AUTHENTICATION ==========
-      // ========== AUTHENTICATION ==========
+      // ========== 1. AUTHENTICATION ==========
       let token;
       
-      // 1. Check if the token is in the Header
+      // Check if the token is in the Header
       if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
           token = req.headers.authorization.split(" ")[1];
           console.log('🎫 Token found in Authorization header');
       } 
-      // 2. If not in header, check the Query Params (for the PDF iframe)
+      // If not in header, check the Query Params (e.g. for streaming/PDF frames)
       else if (req.query.token) {
           token = req.query.token;
           console.log('🎫 Token found in Query Parameters');
@@ -49,19 +48,26 @@ async function authMiddleware(req, res, next) {
           role: decoded.role,
           name: decoded.name
       };
-      // ========== GET IDs FROM BOTH QUERY PARAMS AND URL PARAMS ==========
-      // Check both query params AND URL params
-      const courseId = req.query.courseId || req.params.courseId || req.params.id;
-      const contentId = req.query.contentId || req.params.contentId || req.params.id;
-      const moduleId = req.query.moduleId || req.params.moduleId;
+
+      // ========== 2. PARAMETER RESOLUTION ==========
+      // Extract parameters safely across mixed query and URL parameters
+      const courseId = req.query.courseId || req.params.courseId || (req.params.id && req.path.includes('course') ? req.params.id : null);
+      const contentId = req.query.contentId || req.params.contentId || (req.params.id && !req.path.includes('course') && !req.path.includes('module') ? req.params.id : null);
+      const moduleId = req.query.moduleId || req.params.moduleId || (req.params.id && req.path.includes('module') ? req.params.id : null);
       
       console.log(`\n📌 Parameters resolved:`);
       console.log(`   - courseId: ${courseId || '❌ not provided'}`);
       console.log(`   - contentId: ${contentId || '❌ not provided'}`);
       console.log(`   - moduleId: ${moduleId || '❌ not provided'}`);
       
-      // ========== CHECK COURSE CREATOR STATUS ==========
-      if (courseId) {
+      // Initialize default values for authorization flags
+      req.isCourseCreator = false;
+      req.isContentCreator = false;
+      req.isPreviewContent = false;
+      req.isEnrolled = false;
+
+      // ========== 3. CHECK COURSE CREATOR STATUS ==========
+      if (courseId && courseId !== contentId) {
           console.log(`\n🔍 Checking course creator status for courseId: ${courseId}`);
           const courseCheck = await pool.query(
               `SELECT educator_id, title FROM courses WHERE id = $1 AND is_active = true`,
@@ -75,11 +81,10 @@ async function authMiddleware(req, res, next) {
               console.log(`   - isCourseCreator: ${req.isCourseCreator ? '✅ YES' : '❌ NO'}`);
           } else {
               console.log(`   - ❌ Course not found or inactive`);
-              req.isCourseCreator = false;
           }
       }
       
-      // ========== CHECK MODULE OWNERSHIP ==========
+      // ========== 4. CHECK MODULE OWNERSHIP ==========
       if (moduleId) {
           console.log(`\n🔍 Checking module ownership for moduleId: ${moduleId}`);
           const moduleCheck = await pool.query(`
@@ -102,98 +107,107 @@ async function authMiddleware(req, res, next) {
           }
       }
       
-      // ========== CHECK CONTENT ACCESS ==========
+      // ========== 5. CHECK CONTENT ACCESS ==========
       if (contentId) {
           console.log(`\n🎬 Checking content access for contentId: ${contentId}`);
+          
+          // Fixed structural query layout (Removes invalid c.course_id check)
           const contentCheck = await pool.query(`
               SELECT c.*, 
                      m.course_id,
-                     (SELECT educator_id FROM courses WHERE id = m.course_id) as educator_id,
-                     (SELECT title FROM courses WHERE id = m.course_id) as course_title
+                     co.educator_id,
+                     co.title as course_title
               FROM content_items c
-              JOIN modules m ON c.id = ANY(m.content_ids)
+              LEFT JOIN modules m ON c.id = ANY(m.content_ids)
+              LEFT JOIN courses co ON m.course_id = co.id
               WHERE c.id = $1 AND c.is_active = true
               LIMIT 1
           `, [contentId]);
           
           if (contentCheck.rows.length > 0) {
               const content = contentCheck.rows[0];
-              req.courseId = content.course_id;
-              req.courseTitle = content.course_title;
+              
+              if (content.course_id) {
+                  req.courseId = content.course_id;
+                  req.courseTitle = content.course_title;
+                  req.isCourseCreator = (content.educator_id === req.user.id);
+              }
+              
               req.contentId = contentId;
               req.contentTitle = content.title;
-              req.isContentCreator = (content.educator_id === req.user.id);
+              req.isContentCreator = (content.educator_id === req.user.id) || req.isCourseCreator;
               req.isPreviewContent = content.preview === true;
-              req.isCourseCreator = req.isContentCreator;
               
               console.log(`   - Content title: ${content.title}`);
               console.log(`   - Content type: ${content.content_type}`);
               console.log(`   - Preview flag: ${content.preview === true ? '✅ true' : '❌ false'}`);
-              console.log(`   - Content status: ${content.status}`);
-              console.log(`   - Associated course: ${content.course_title}`);
+              console.log(`   - Associated course: ${content.course_title || '❌ Not assigned to a module yet'}`);
               console.log(`   - isContentCreator: ${req.isContentCreator ? '✅ YES' : '❌ NO'}`);
               console.log(`   - isPreviewContent: ${req.isPreviewContent ? '✅ YES' : '❌ NO'}`);
               
-              // Check enrollment if NOT creator and NOT preview
-              if (!req.isContentCreator && !req.isPreviewContent) {
+              // Verify active enrollment status if user isn't the creator or a preview customer
+              if (!req.isContentCreator && !req.isPreviewContent && req.courseId) {
                   console.log(`   - Checking enrollment (non-creator, non-preview)...`);
                   const enrollmentCheck = await pool.query(
                       `SELECT id FROM enrollments 
                        WHERE user_id = $1 AND course_id = $2 AND status = 'active'`,
-                      [req.user.id, content.course_id]
+                      [req.user.id, req.courseId]
                   );
                   req.isEnrolled = enrollmentCheck.rows.length > 0;
                   console.log(`   - isEnrolled: ${req.isEnrolled ? '✅ YES' : '❌ NO'}`);
               } else {
-                  req.isEnrolled = false;
                   if (req.isContentCreator) console.log(`   - Skipping enrollment check (user is creator)`);
                   if (req.isPreviewContent) console.log(`   - Skipping enrollment check (content is preview)`);
               }
           } else {
               console.log(`   - ❌ Content not found or inactive`);
+              // Fallback protection for deletions or uploads not linked to a module yet
+              if (req.user.role === 'educator') {
+                  console.log(`   - ℹ️ User is an educator. Granting contextual creator access bypass.`);
+                  req.isContentCreator = true;
+                  req.isCourseCreator = true;
+              }
           }
       }
       
-      // ========== FINAL FLAGS SUMMARY ==========
+      // ========== 6. FINAL FLAGS SUMMARY ==========
       console.log(`\n📋 FINAL FLAGS SET FOR THIS REQUEST:`);
       console.log(`   ┌─────────────────────────────────────────────────┐`);
       console.log(`   │ req.user.id:        ${req.user.id}`);
       console.log(`   │ req.user.role:      ${req.user.role}`);
-      console.log(`   │ req.user.email:     ${req.user.email}`);
-      console.log(`   │ req.user.name:      ${req.user.name}`);
       console.log(`   ├─────────────────────────────────────────────────┤`);
-      console.log(`   │ req.courseId:       ${req.courseId || '❌ not set'}`);
-      console.log(`   │ req.courseTitle:    ${req.courseTitle || '❌ not set'}`);
-      console.log(`   │ req.isCourseCreator:${req.isCourseCreator === undefined ? '❌ not set' : (req.isCourseCreator ? '✅ YES' : '❌ NO')}`);
-      console.log(`   ├─────────────────────────────────────────────────┤`);
-      console.log(`   │ req.contentId:      ${req.contentId || '❌ not set'}`);
-      console.log(`   │ req.contentTitle:   ${req.contentTitle || '❌ not set'}`);
-      console.log(`   │ req.isContentCreator:${req.isContentCreator === undefined ? '❌ not set' : (req.isContentCreator ? '✅ YES' : '❌ NO')}`);
-      console.log(`   │ req.isPreviewContent:${req.isPreviewContent === undefined ? '❌ not set' : (req.isPreviewContent ? '✅ YES' : '❌ NO')}`);
-      console.log(`   │ req.isEnrolled:     ${req.isEnrolled === undefined ? '❌ not set' : (req.isEnrolled ? '✅ YES' : '❌ NO')}`);
+      console.log(`   │ req.isCourseCreator:${req.isCourseCreator ? '✅ YES' : '❌ NO'}`);
+      console.log(`   │ req.isContentCreator:${req.isContentCreator ? '✅ YES' : '❌ NO'}`);
+      console.log(`   │ req.isPreviewContent:${req.isPreviewContent ? '✅ YES' : '❌ NO'}`);
+      console.log(`   │ req.isEnrolled:     ${req.isEnrolled ? '✅ YES' : '❌ NO'}`);
       console.log(`   └─────────────────────────────────────────────────┘`);
       
-      // ========== ACCESS DECISION ==========
+      // ========== 7. ACCESS DECISION BLOCK ==========
       if (contentId) {
           console.log(`\n🔒 ACCESS DECISION:`);
-          const hasAccess = req.isContentCreator || req.isEnrolled || req.isPreviewContent;
+          const hasAccess = req.isCourseCreator || req.isContentCreator || req.isEnrolled || req.isPreviewContent;
+          
           if (hasAccess) {
               let accessReason = '';
-              if (req.isContentCreator) accessReason = 'creator';
+              if (req.isCourseCreator || req.isContentCreator) accessReason = 'creator bypass';
               else if (req.isPreviewContent) accessReason = 'preview content';
               else if (req.isEnrolled) accessReason = 'enrolled user';
+              
               console.log(`   ✅ ACCESS GRANTED (${accessReason})`);
+              console.log(`\n${'='.repeat(70)}\n`);
+              return next();
           } else {
               console.log(`   ❌ ACCESS DENIED (not creator, not enrolled, not preview)`);
+              console.log(`\n${'='.repeat(70)}\n`);
+              return res.status(403).json({ error: "Access denied. You do not have permission to view or manage this content." });
           }
       }
       
       console.log(`\n${'='.repeat(70)}\n`);
-      
       next();
+
   } catch (err) {
       console.error("\n❌ AUTH MIDDLEWARE ERROR:", err);
-      console.error("Stack trace:", err.stack);
       console.log(`${'='.repeat(70)}\n`);
       res.status(500).json({ error: "Internal server error" });
   }

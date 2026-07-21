@@ -8,6 +8,7 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
   const [description, setDescription] = useState('');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(false);
+  const [priority, setPriority] = useState(0); // ✅ KEEP: Priority field
   const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
@@ -16,6 +17,7 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       setDescription('');
       setFile(null);
       setPreview(false);
+      setPriority(0); // ✅ KEEP: Reset priority
     }
   }, [isOpen]);
 
@@ -37,7 +39,14 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
       formData.append('title', title);
       formData.append('description', description);
       formData.append('file', file);
-      formData.append('preview', preview);
+      
+      // ✅ KEEP: Stringified booleans to bypass multipart parsing traps
+      formData.append('preview', preview ? 'true' : 'false');
+      
+      // ✅ KEEP: Clamp user entry into safe base-10 integer
+      const parsedPriority = parseInt(priority, 10);
+      formData.append('priority', isNaN(parsedPriority) ? 0 : parsedPriority);
+      
       formData.append('content_type', isVideo ? 'video' : 'pdf');
 
       if (folderId) {
@@ -48,10 +57,32 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
         ? `/content/upload-video?moduleId=${moduleId}`
         : `/content/upload?moduleId=${moduleId}`;
 
-      await fetchAPI(endpoint, {
+      // ✅ KEEP: Manual fetch with API base URL (more reliable)
+      const token = localStorage.getItem('token');
+      const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+      
+      const response = await fetch(`${apiBaseUrl}${endpoint}`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
         body: formData,
       });
+
+      // ✅ KEEP: Better error handling with JSON parsing
+      if (!response.ok) {
+        let errorMessage = 'Upload failed';
+        const contentType = response.headers.get("content-type");
+        
+        if (contentType && contentType.includes("application/json")) {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } else {
+          errorMessage = `Server Error (${response.status}): Target endpoint not found or unreachable.`;
+        }
+        
+        throw new Error(errorMessage);
+      }
 
       onSave();
       onClose();
@@ -87,11 +118,24 @@ export default function ContentModal({ isOpen, onClose, moduleId, folderId, onSa
 
           <div>
             <label className="font-bold text-sm ml-1 mb-1 block">Description</label>
-            <textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              rows={2}
-              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]"
+            <textarea 
+              value={description} 
+              onChange={e => setDescription(e.target.value)} 
+              rows={2} 
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-medium focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
+            />
+          </div>
+
+          {/* ✅ KEEP: New Priority field */}
+          <div>
+            <label className="font-bold text-sm ml-1 mb-1 block">Display Priority (Order)</label>
+            <input 
+              type="number" 
+              value={priority} 
+              min="0"
+              onChange={(e) => setPriority(e.target.value)} 
+              className="w-full bg-[#F4F4F4] border-2 border-black rounded-xl px-4 py-2 font-bold focus:outline-none focus:shadow-[4px_4px_0px_0px_#F26B4D]" 
+              placeholder="0 = first, 1 = second..."
             />
           </div>
 

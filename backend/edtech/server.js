@@ -135,7 +135,6 @@ async function setupDatabase() {
             )
         `);
 
-        // --- NEW: Quiz tables ---
         await pool.query(`
             CREATE TABLE IF NOT EXISTS quizzes (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -176,23 +175,19 @@ async function setupDatabase() {
 setupDatabase();
 
 // ============================================
-// Middleware
+// Middleware (🌟 UPDATED FOR LARGE VIDEOS)
 // ============================================
-app.use(express.json());
+app.use(express.json({ limit: "500mb" }));
+app.use(express.urlencoded({ limit: "500mb", extended: true }));
 app.use(cors());
-app.use(express.urlencoded({ extended: true }));
+
 app.use((req, res, next) => {
-    // 1. Force the browser to ALWAYS fetch fresh data (Fixes the "many refreshes" bug)
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-
-    // 2. Allows the browser to render the response in an iframe from the same origin
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
-
-    // 3. Explicitly trust your actual production domain!
     res.setHeader("Content-Security-Policy", "frame-ancestors 'self' http://localhost:5173 https://sv.gridsphere.in");
-
     next();
 });
+
 // ============================================
 // Routes
 // ============================================
@@ -205,6 +200,7 @@ app.use("/api/enrollments", enrollmentRoutes);
 app.use("/api/video", videoRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/quiz", quizRoutes);
+
 // ============================================
 // HLS Proxy Route
 // ============================================
@@ -214,7 +210,6 @@ app.get("/api/hls/serve", async (req, res) => {
         if (!videoId || !hlsPathRaw) return res.status(400).send("Missing videoId or path");
 
         const hlsPath = hlsPathRaw;
-
         if (hlsPath.includes("..")) return res.status(400).send("Invalid path");
 
         const result = await pool.query(
@@ -254,7 +249,8 @@ app.get("/api/hls/serve", async (req, res) => {
         );
         res.setHeader("Cache-Control", "no-cache, no-store, private");
         res.setHeader("Access-Control-Allow-Origin", "*");
-	if (r2Response.ContentLength) {
+        
+        if (r2Response.ContentLength) {
             res.setHeader("Content-Length", r2Response.ContentLength);
         }
         if (isTs) {

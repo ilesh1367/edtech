@@ -11,7 +11,6 @@ import authMiddleware from "../middleware/auth.js";
 import { generateFileHash, getFileExtension, getMimeType } from "../utils/helpers.js";
 import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 
-// Import local FFmpeg / FFprobe bin installers
 import { path as ffmpegPath } from "@ffmpeg-installer/ffmpeg";
 import { path as ffprobePath } from "@ffprobe-installer/ffprobe";
 
@@ -19,24 +18,31 @@ const router = express.Router();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMP_VIDEO_DIR = path.join(__dirname, "../temp_videos");
 
+// Ensure scratch disk space exists securely
 if (!fs.existsSync(TEMP_VIDEO_DIR)) {
     fs.mkdirSync(TEMP_VIDEO_DIR, { recursive: true });
 }
 
+// Memory constraints protection
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 500 * 1024 * 1024 }
+    limits: { fileSize: 500 * 1024 * 1024 } // 500MB Limit
 });
 
 const activeJobs = new Map();
 
+// Helper safely mapping clean resolution strings for the M3U8 Master manifest
+function cleanResolutionString(scaleStr) {
+    const standard = scaleStr.replace("w=", "").replace("h=", "");
+    return standard.includes(":") ? standard.replace(":", "x") : standard;
+}
+
 // POST /api/content/upload
 router.post("/upload", authMiddleware, upload.single("file"), async (req, res) => {
-    // 1. Open a dedicated database client for transactions
     const client = await pool.connect();
-    
     try {
-        const moduleId = req.query.moduleId; // Grab from URL
+        // Fallback checks both req.body AND req.query for maximum reliability!
+        const moduleId = req.body.moduleId || req.query.moduleId; 
         const { title, description, content_type, preview, folder_id, priority } = req.body;
         const file = req.file;
         
@@ -52,11 +58,16 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
         const extension = getFileExtension(file.originalname);
         const mimeType = getMimeType(file.originalname) || "application/pdf";
 
-        // Check for duplicates
-        const existing = await client.query(`SELECT * FROM content_items WHERE file_hash = $1`, [fileHash]);
+        // 🚀 FIX: Only treat ACTIVE rows as real duplicates. A soft-deleted row
+        // (is_active = false, r2_key stripped) with a matching hash must NOT
+        // short-circuit the upload — that was returning dead, unopenable
+        // "duplicates" forever after any delete + re-upload of the same file.
+        const existing = await client.query(
+            `SELECT * FROM content_items WHERE file_hash = $1 AND is_active = true`,
+            [fileHash]
+        );
         if (existing.rows.length > 0) {
             const existingId = existing.rows[0].id;
-            // Even if duplicate, link it to THIS module!
             await client.query(`
                 UPDATE modules 
                 SET content_ids = array_append(COALESCE(content_ids, ARRAY[]::uuid[]), $1) 
@@ -69,7 +80,6 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
         const hashPrefix = fileHash.slice(0, 6);
         const r2Key = `content/${hashPrefix}/${fileHash}${extension}`;
         
-        // Upload to R2 Cloud
         await r2Client.send(new PutObjectCommand({ 
             Bucket: process.env.R2_BUCKET_NAME || R2_BUCKET_NAME, 
             Key: r2Key, 
@@ -77,10 +87,8 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
             ContentType: mimeType 
         }));
 
-        // 🌟 Start Database Transaction
         await client.query('BEGIN');
 
-        // Insert the file
         const contentResult = await client.query(`
             INSERT INTO content_items (title, description, content_type, file_hash, file_name, file_size_bytes, mime_type, r2_key, status, preview, priority, folder_id, created_by)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ready', $9, $10, $11, $12) RETURNING *
@@ -88,7 +96,6 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
 
         const newContentId = contentResult.rows[0].id;
 
-        // Link file to the Module
         await client.query(`
             UPDATE modules 
             SET content_ids = array_append(COALESCE(content_ids, ARRAY[]::uuid[]), $1) 
@@ -96,8 +103,6 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
         `, [newContentId, moduleId]);
         
         await client.query('COMMIT');
-        
-        // Send final success response
         res.status(201).json({ success: true, content: contentResult.rows[0] });
 
     } catch (err) {
@@ -108,12 +113,13 @@ router.post("/upload", authMiddleware, upload.single("file"), async (req, res) =
         client.release();
     }
 });
+
 // POST /api/content/upload-video
 router.post("/upload-video", authMiddleware, upload.single("file"), async (req, res) => {
     const client = await pool.connect();
-    
     try {
-        const moduleId = req.query.moduleId;
+        // Fallback checks both req.body AND req.query for maximum reliability!
+        const moduleId = req.body.moduleId || req.query.moduleId;
         const { title, description, preview, folder_id, priority } = req.body;
         const file = req.file;
 
@@ -129,7 +135,14 @@ router.post("/upload-video", authMiddleware, upload.single("file"), async (req, 
         const fileHash = generateFileHash(file.buffer);
         const extension = getFileExtension(file.originalname);
 
-        const existing = await client.query(`SELECT * FROM content_items WHERE file_hash = $1`, [fileHash]);
+        // 🚀 FIX: Same as /upload — only ACTIVE rows count as a real duplicate.
+        // Without this, re-uploading a video whose old row was soft-deleted
+        // just returns the dead row (is_active=false, r2_key=null) forever,
+        // so it "succeeds" but never actually plays.
+        const existing = await client.query(
+            `SELECT * FROM content_items WHERE file_hash = $1 AND is_active = true`,
+            [fileHash]
+        );
         if (existing.rows.length > 0) {
             const existingId = existing.rows[0].id;
             await client.query(`
@@ -141,22 +154,56 @@ router.post("/upload-video", authMiddleware, upload.single("file"), async (req, 
             return res.status(200).json({ success: true, message: "Video already exists.", content: existing.rows[0], isDuplicate: true });
         }
 
-        // --- Save temp file & run FFprobe (Keep your existing logic here) ---
         const tempFilePath = path.join(TEMP_VIDEO_DIR, `${fileHash}${extension}`);
         fs.writeFileSync(tempFilePath, file.buffer);
         
         let videoInfo = { width: 0, height: 0, duration: 0 };
-        // NOTE: Make sure your existing FFprobe logic stays here...
-        // ...
+        try {
+            videoInfo = await new Promise((resolve, reject) => {
+                const ffprobe = spawn(ffprobePath, [
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height:format=duration",
+                    "-of", "json",
+                    tempFilePath
+                ]);
+
+                let output = "";
+                ffprobe.stdout.on("data", (data) => output += data.toString());
+                ffprobe.on("close", (code) => {
+                    if (code !== 0) return reject(new Error("FFprobe parsed with error exit code"));
+                    try {
+                        const parsed = JSON.parse(output);
+                        const stream = parsed.streams?.[0] || {};
+                        const duration = parsed.format?.duration || 0;
+                        resolve({
+                            width: parseInt(stream.width) || 1280,
+                            height: parseInt(stream.height) || 720,
+                            duration: Math.round(parseFloat(duration)) || 0
+                        });
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            });
+        } catch (probeErr) {
+            console.warn("⚠️ FFprobe fallback activated:", probeErr.message);
+            videoInfo = { width: 1280, height: 720, duration: 0 };
+        }
         
-        // 🌟 Start Database Transaction for Video
+        const targetResolutions = [
+            { name: "360p", scale: "w=640:h=360", bitrate: "800k" },
+            { name: "720p", scale: "w=1280:h=720", bitrate: "2500k" }
+        ];
+        if (videoInfo.height >= 1080) {
+            targetResolutions.push({ name: "1080p", scale: "w=1920:h=1080", bitrate: "5000k" });
+        }
+
         await client.query('BEGIN');
 
-        // Note: For videos, the status usually starts as 'processing' if you have a worker, 
-        // but if you are serving immediately, keep it as 'ready'.
         const contentResult = await client.query(`
             INSERT INTO content_items (title, description, content_type, file_hash, file_name, file_size_bytes, mime_type, duration_seconds, status, preview, priority, folder_id, created_by)
-            VALUES ($1, $2, 'video', $3, $4, $5, $6, $7, 'ready', $8, $9, $10, $11) RETURNING *
+            VALUES ($1, $2, 'video', $3, $4, $5, $6, $7, 'processing', $8, $9, $10, $11) RETURNING *
         `, [title, description, fileHash, file.originalname, file.size, file.mimetype, videoInfo.duration, preview === 'true' || preview === true, priority || 2, folder_id || null, req.user.id]);
 
         const newContentId = contentResult.rows[0].id;
@@ -169,7 +216,8 @@ router.post("/upload-video", authMiddleware, upload.single("file"), async (req, 
 
         await client.query('COMMIT');
 
-        // Optional: Kick off background video processing worker here if you have one.
+        // Background transcoding thread execution
+        transcodeVideo(newContentId, tempFilePath, fileHash, title, targetResolutions, videoInfo.duration);
         
         res.status(201).json({ success: true, content: contentResult.rows[0] });
 
@@ -181,6 +229,7 @@ router.post("/upload-video", authMiddleware, upload.single("file"), async (req, 
         client.release();
     }
 });
+
 // GET /api/content
 router.get("/", async (req, res) => {
     try {
@@ -190,8 +239,8 @@ router.get("/", async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 // GET /api/content/folders/:moduleId
-// Retrieves all folders for a specific module
 router.get("/folders/:moduleId", async (req, res) => {
     try {
         const result = await pool.query(
@@ -205,7 +254,6 @@ router.get("/folders/:moduleId", async (req, res) => {
 });
 
 // POST /api/content/folder
-// Creates a new folder inside a module
 router.post("/folder", authMiddleware, async (req, res) => {
     const { module_id, title } = req.body;
     try {
@@ -220,7 +268,6 @@ router.post("/folder", authMiddleware, async (req, res) => {
 });
 
 // PUT /api/content/bulk-move
-// Moves an array of content IDs into a specific folder
 router.put("/bulk-move", authMiddleware, async (req, res) => {
     const { content_ids, folder_id } = req.body; 
     try {
@@ -233,8 +280,8 @@ router.put("/bulk-move", authMiddleware, async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
 // PUT /api/content/folder/:id
-// Rename a folder
 router.put("/folder/:id", authMiddleware, async (req, res) => {
     try {
         const { title } = req.body;
@@ -249,7 +296,6 @@ router.put("/folder/:id", authMiddleware, async (req, res) => {
 });
 
 // DELETE /api/content/folder/:id
-// Delete a folder (contents safely return to the main tab due to ON DELETE SET NULL)
 router.delete("/folder/:id", authMiddleware, async (req, res) => {
     try {
         await pool.query(`DELETE FROM folders WHERE id = $1`, [req.params.id]);
@@ -258,8 +304,8 @@ router.delete("/folder/:id", authMiddleware, async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
 // PUT /api/content/:id/priority
-// Instantly updates the display order priority of a content item
 router.put("/:id/priority", authMiddleware, async (req, res) => {
     try {
         const { priority } = req.body;
@@ -316,7 +362,6 @@ router.get("/:id/pdf", authMiddleware, async (req, res) => {
         }
 
         const isOwner = content.created_by === req.user.id || isCourseOwner;
-        
         if (!isOwner && !req.isContentCreator && !req.isEnrolled && !req.isPreviewContent) {
             return res.status(403).json({ 
                 error: "Access denied. You are not enrolled in this course.",
@@ -339,7 +384,6 @@ router.get("/:id/pdf", authMiddleware, async (req, res) => {
         res.setHeader("Content-Disposition", "inline");
         res.setHeader("Content-Length", pdfBuffer.length);
         res.removeHeader("X-Frame-Options"); 
-        
         res.send(pdfBuffer);
         
      } catch (err) {
@@ -367,7 +411,6 @@ router.get("/:id/stream", authMiddleware, async (req, res) => {
         }
 
         const isOwner = content.created_by === req.user.id || isCourseOwner;
-        
         if (!isOwner && !req.isContentCreator && !req.isEnrolled && !req.isPreviewContent) {
             return res.status(403).json({ 
                 error: "Access denied. You are not enrolled in this course.",
@@ -403,28 +446,21 @@ router.put("/:id", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         const { title, description, preview } = req.body;
-        
-        const contentCheck = await pool.query(`
-            SELECT ci.*, c.educator_id 
-            FROM content_items ci
-            JOIN modules m ON ci.id = ANY(m.content_ids)
-            JOIN courses c ON m.course_id = c.id
-            WHERE ci.id = $1
-            LIMIT 1
-        `, [id]);
-        
+
+        const contentCheck = await pool.query(`SELECT * FROM content_items WHERE id = $1`, [id]);
         if (contentCheck.rows.length === 0) {
             return res.status(404).json({ error: "Content not found" });
         }
-        
-        if (contentCheck.rows[0].educator_id !== req.user.id) {
-            return res.status(403).json({ error: "Only course creator can update content" });
+
+        const contentItem = contentCheck.rows[0];
+        if (contentItem.created_by !== req.user.id && req.user.role !== "admin") {
+            return res.status(403).json({ error: "Only the creator can update this content" });
         }
-        
+
         const updateFields = [];
         const values = [];
         let paramCounter = 1;
-        
+
         if (title !== undefined) {
             updateFields.push(`title = $${paramCounter++}`);
             values.push(title === "" ? null : title);
@@ -435,26 +471,27 @@ router.put("/:id", authMiddleware, async (req, res) => {
         }
         if (preview !== undefined) {
             updateFields.push(`preview = $${paramCounter++}`);
-            values.push(preview);
+            values.push(preview === 'true' || preview === true);
         }
-        
+
         if (updateFields.length === 0) {
             return res.status(400).json({ error: "No fields to update" });
         }
-        
+
         updateFields.push(`updated_at = NOW()`);
         values.push(id);
-        
+
         const query = `
             UPDATE content_items 
             SET ${updateFields.join(', ')}
             WHERE id = $${paramCounter}
             RETURNING *
         `;
-        
+
         const result = await pool.query(query, values);
         res.json({ success: true, content: result.rows[0] });
     } catch (err) {
+        console.error("Update error:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -463,26 +500,17 @@ router.put("/:id", authMiddleware, async (req, res) => {
 router.delete("/:id", authMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
-        
-        const contentCheck = await pool.query(`
-            SELECT ci.*, c.educator_id 
-            FROM content_items ci
-            JOIN modules m ON ci.id = ANY(m.content_ids)
-            JOIN courses c ON m.course_id = c.id
-            WHERE ci.id = $1
-            LIMIT 1
-        `, [id]);
-        
+        const contentCheck = await pool.query(`SELECT * FROM content_items WHERE id = $1`, [id]);
+
         if (contentCheck.rows.length === 0) {
             return res.status(404).json({ error: "Content asset not found" });
         }
-        
+
         const contentItem = contentCheck.rows[0];
-        
-        if (contentItem.educator_id !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ error: "Only the course creator can wipe content assets" });
+        if (contentItem.created_by !== req.user.id && req.user.role !== "admin") {
+            return res.status(403).json({ error: "Only the creator can wipe content assets" });
         }
-        
+
         if (contentItem.r2_key) {
             try {
                 const type = String(contentItem.content_type).toLowerCase();
@@ -492,7 +520,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
                         Bucket: R2_BUCKET_NAME,
                         Prefix: baseFolderPrefix
                     }));
-                    
+
                     if (listedObjects.Contents && listedObjects.Contents.length > 0) {
                         for (const object of listedObjects.Contents) {
                             await r2Client.send(new DeleteObjectCommand({
@@ -512,7 +540,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
                 console.error("⚠️ Failed to purge file cleanly from R2 bucket storage:", r2Err.message);
             }
         }
-        
+
         await pool.query(`
             UPDATE content_items 
             SET is_active = false, 
@@ -520,21 +548,24 @@ router.delete("/:id", authMiddleware, async (req, res) => {
                 updated_at = NOW()
             WHERE id = $1
         `, [id]);
-        
+
         await pool.query(`
             UPDATE modules 
-            SET content_ids = array_remove(content_ids, $1)
+            SET content_ids = array_remove(content_ids, $1),
+                updated_at = NOW()
             WHERE $1 = ANY(content_ids)
         `, [id]);
-        
+
         res.json({ success: true, message: "Asset purged from storage and active course structures cleanly!" });
     } catch (err) {
+        console.error("Delete error:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
+// BACKGROUND TRANSCODER EXECUTION ENGINE
 async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions, duration) {
-    console.log(`\n${"=".repeat(70)}\n🎬 TRANSCODING — ${contentId}\n${"=".repeat(70)}`);
+    console.log(`\n${"=".repeat(70)}\n🎬 TRANSCODING START — ID: ${contentId}\n${"=".repeat(70)}`);
 
     const outputDir = path.join(TEMP_VIDEO_DIR, `hls_${contentId}`);
     const hashPrefix = fileHash.slice(0, 6);
@@ -552,10 +583,9 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
             const segmentPattern = path.join(qualityDir, "segment_%03d.ts");
             const playlistPath = path.join(qualityDir, "index.m3u8");
 
-            console.log(`\n🎬 Transcoding ${resName}...`);
+            console.log(`\n🎬 Compiling Variant layer [${resName}]...`);
 
             await new Promise((resolve, reject) => {
-                // Modified: Using absolute local ffmpegPath installer reference
                 const ffmpeg = spawn(ffmpegPath, [
                     "-i", inputPath,
                     "-vf", `scale=${scale}`,
@@ -571,25 +601,20 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
                     "-hls_segment_filename", segmentPattern,
                     playlistPath
                 ]);
+
                 ffmpeg.stderr.on("data", (data) => {
                     const str = data.toString();
                     const match = str.match(/frame=\s*(\d+)/);
                     if (match && parseInt(match[1]) % 500 === 0) {
-                        console.log(`  🎬 ${resName}: frame ${match[1]}`);
+                        console.log(`   🎬 ${resName}: frame ${match[1]}`);
                     }
                 });
 
                 ffmpeg.on("close", (code) => {
-                    if (code === 0) {
-                        console.log(`%c✅ ${resName} ffmpeg done`, "color: green");
-                        resolve();
-                    } else {
-                        reject(new Error(`ffmpeg exited ${code} for ${resName}`));
-                    }
+                    if (code === 0) resolve();
+                    else reject(new Error(`ffmpeg exited ${code} for ${resName}`));
                 });
-                ffmpeg.on("error", (err) => {
-                    reject(new Error(`ffmpeg spawn failed: ${err.message}`));
-                });
+                ffmpeg.on("error", (err) => reject(new Error(`ffmpeg spawn failed: ${err.message}`)));
             });
 
             const allFiles = fs.readdirSync(qualityDir).sort();
@@ -600,28 +625,27 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
                 await r2Client.send(new PutObjectCommand({
                     Bucket: R2_BUCKET_NAME,
                     Key: `${r2BasePath}/${resName}/${seg}`,
-                    Body: fs.readFileSync(filePath),
+                    Body: fs.createReadStream(filePath), 
                     ContentType: "video/mp2t"
                 }));
-                console.log(`  ✓ ${resName}/${seg}`);
-                fs.unlinkSync(filePath);
+                fs.unlinkSync(filePath); 
             }
 
             if (fs.existsSync(playlistPath)) {
                 await r2Client.send(new PutObjectCommand({
                     Bucket: R2_BUCKET_NAME,
                     Key: `${r2BasePath}/${resName}/index.m3u8`,
-                    Body: fs.readFileSync(playlistPath),
+                    Body: fs.createReadStream(playlistPath), 
                     ContentType: "application/vnd.apple.mpegurl"
                 }));
-                console.log(`  ✓ ${resName}/index.m3u8`);
+                fs.unlinkSync(playlistPath);
             }
         }
 
         let masterManifest = "#EXTM3U\n#EXT-X-VERSION:3\n";
         for (const res of resolutions) {
             const bandwidth = res.name === "1080p" ? "5000000" : res.name === "720p" ? "2800000" : "1200000";
-            const resAttr = res.scale.replace(":", "x");
+            const resAttr = cleanResolutionString(res.scale); 
             masterManifest += `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resAttr}\n`;
             masterManifest += `${res.name}/index.m3u8\n`;
         }
@@ -633,7 +657,6 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
             Body: Buffer.from(masterManifest, "utf-8"),
             ContentType: "application/vnd.apple.mpegurl"
         }));
-        console.log(`✅ Master manifest uploaded to: ${masterR2Key}`);
 
         const resolutionNames = resolutions.map(r => r.name);
         const metadataObj = {
@@ -644,8 +667,7 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
 
         await pool.query(`
             UPDATE content_items
-            SET 
-                status = 'ready',
+            SET status = 'ready',
                 r2_key = $1,
                 duration_seconds = $2,
                 metadata = $3,
@@ -657,41 +679,25 @@ async function transcodeVideo(contentId, inputPath, fileHash, title, resolutions
         console.log(`\n✅ TRANSCODING COMPLETE in ${elapsed} seconds`);
         activeJobs.delete(contentId);
 
-        try {
-            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-            if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
-            console.log("🧹 Temp files cleaned up");
-        } catch (e) {
-            console.warn("Cleanup warning:", e.message);
-        }
-
     } catch (err) {
         console.error(`❌ Transcoding failed:`, err.message);
         activeJobs.delete(contentId);
 
         await pool.query(`
             UPDATE content_items
-            SET 
-                status = 'failed',
+            SET status = 'failed',
                 metadata = $1,
                 updated_at = NOW()
             WHERE id = $2::uuid
-        `, [{
-            error: err.message,
-            failed_at: new Date().toISOString()
-        }, contentId]);
-
+        `, [{ error: err.message, failed_at: new Date().toISOString() }, contentId]);
+    } finally {
         try {
             if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-            const od = path.join(TEMP_VIDEO_DIR, `hls_${contentId}`);
-            if (fs.existsSync(od)) fs.rmSync(od, { recursive: true, force: true });
+            if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
         } catch (e) {
             console.warn("Cleanup warning:", e.message);
         }
     }
 }
-// GET /api/content/folders/:moduleId
-
-
 
 export default router;
